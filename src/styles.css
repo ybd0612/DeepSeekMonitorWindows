@@ -85,13 +85,13 @@ button {
 .mini-panel {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0 12px 10px;
+  gap: 2px;
+  padding: 0 10px 8px;
 }
 
 .mini-drag {
   flex: 0 0 auto;
-  min-height: 18px;
+  min-height: 10px;
 }
 
 .mini-line {

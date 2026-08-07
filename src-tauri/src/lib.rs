@@ -1324,6 +1324,34 @@ pub fn run() {
                     }
                     Err(error) => log::warn!("读取显示设置失败: {error}"),
                 }
+
+                // 几何变更由 Rust 直接记录:以 config.mini_mode 为准写入对应字段,
+                // 避免前端 mode 状态竞态(切换瞬间 onResized 用旧状态写错字段)。
+                window.on_window_event(|event| match event {
+                    tauri::WindowEvent::Resized(size) => {
+                        let mut config = read_stored_config().unwrap_or_default();
+                        if config.mini_mode {
+                            config.mini_width = size.width;
+                            config.mini_height = size.height;
+                        } else {
+                            config.window_width = size.width;
+                            config.window_height = size.height;
+                        }
+                        let _ = write_stored_config(&config);
+                    }
+                    tauri::WindowEvent::Moved(position) => {
+                        let mut config = read_stored_config().unwrap_or_default();
+                        if config.mini_mode {
+                            config.mini_x = Some(position.x);
+                            config.mini_y = Some(position.y);
+                        } else {
+                            config.window_x = Some(position.x);
+                            config.window_y = Some(position.y);
+                        }
+                        let _ = write_stored_config(&config);
+                    }
+                    _ => {}
+                });
             }
 
             Ok(())

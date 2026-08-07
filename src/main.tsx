@@ -300,55 +300,6 @@ function App() {
       .catch(() => {});
   }, []);
 
-  // 记住用户拖拽后的窗口尺寸与位置,写入配置供 Rust 显示/重启时恢复。
-  // 浏览器预览模式下没有 Tauri 窗口,静默跳过。
-  React.useEffect(() => {
-    let unlistenResize: (() => void) | undefined;
-    let unlistenMove: (() => void) | undefined;
-    let saveTimer: number | undefined;
-    let moveTimer: number | undefined;
-    try {
-      const win = getCurrentWindow();
-      win
-        .onResized(({ payload }) => {
-          window.clearTimeout(saveTimer);
-          saveTimer = window.setTimeout(() => {
-            // 普通/mini 各自独立记录尺寸
-            void invoke("save_window_geometry", {
-              mini: miniMode,
-              width: payload.width,
-              height: payload.height,
-            }).catch(() => {});
-          }, 400);
-        })
-        .then((fn) => {
-          unlistenResize = fn;
-        })
-        .catch(() => {});
-      win
-        .onMoved(({ payload }) => {
-          window.clearTimeout(moveTimer);
-          moveTimer = window.setTimeout(() => {
-            // 普通/mini 各自独立记录位置
-            void invoke("save_window_geometry", { mini: miniMode, x: payload.x, y: payload.y }).catch(
-              () => {},
-            );
-          }, 400);
-        })
-        .then((fn) => {
-          unlistenMove = fn;
-        })
-        .catch(() => {});
-    } catch {
-      // 浏览器预览无 Tauri 窗口,静默跳过
-    }
-    return () => {
-      window.clearTimeout(saveTimer);
-      window.clearTimeout(moveTimer);
-      unlistenResize?.();
-      unlistenMove?.();
-    };
-  }, [miniMode]);
 
   React.useEffect(() => {
     if (isSettingsWindow || !autoRefreshEnabled) {
