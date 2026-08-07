@@ -207,8 +207,8 @@ pub fn run() {
             let url = tauri::WebviewUrl::App("index.html".into());
             tauri::WebviewWindowBuilder::new(app, "settings", url)
                 .title("DeepSeek Monitor 设置")
-                .inner_size(420.0, 620.0)
-                .min_inner_size(340.0, 420.0)
+                .inner_size(480.0, 700.0)
+                .min_inner_size(400.0, 520.0)
                 .resizable(true)
                 .decorations(false)
                 .transparent(true)

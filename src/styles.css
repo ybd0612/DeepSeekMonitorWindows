@@ -58,6 +58,15 @@ button {
   backdrop-filter: blur(26px) saturate(1.12);
 }
 
+/* 独立设置窗口:内容实心不透明,不参与整窗透明度(透明度只作用于主面板) */
+[data-window="settings"] .settings-panel {
+  background: linear-gradient(145deg, rgb(147, 120, 55), rgb(61, 76, 33));
+  backdrop-filter: none;
+}
+[data-window="settings"][data-theme="light"] .settings-panel {
+  background: linear-gradient(150deg, rgb(150, 205, 236), rgb(172, 224, 206));
+}
+
 .panel {
   width: 100vw;
   height: 100vh;

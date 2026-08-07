@@ -242,14 +242,19 @@ function App() {
         setShowFlashRow(config.showFlashRow);
         setShowProRow(config.showProRow);
         setShowChart(config.showChart);
-        applyWindowOpacity(Math.round((config.windowOpacity ?? 1) * 100));
+        // 整窗透明度只作用于主面板,设置窗口保持实心
+        if (!isSettingsWindow) {
+          applyWindowOpacity(Math.round((config.windowOpacity ?? 1) * 100));
+        }
       })
       .catch(() => {
         setRefreshIntervalSeconds(60);
         setAutoRefreshEnabled(false);
-        applyWindowOpacity(100);
+        if (!isSettingsWindow) {
+          applyWindowOpacity(100);
+        }
       });
-  }, []);
+  }, [isSettingsWindow]);
 
   // 记住用户拖拽后的窗口尺寸,写入配置供 Rust setup 恢复。
   // 浏览器预览模式下没有 Tauri 窗口,静默跳过。
@@ -1193,7 +1198,7 @@ function SettingsPanel({
                 onChange={(event) => {
                   const nextOpacity = Number(event.target.value);
                   setOpacity(nextOpacity);
-                  applyWindowOpacity(nextOpacity);
+                  // 不作用于本窗口;主窗口经 save_display_settings → 事件实时跟随
                   persistDisplay(nextOpacity, alwaysOnTop);
                 }}
               />
@@ -1415,6 +1420,15 @@ function ModelDetailPanel({
 
 // Apply the saved theme before first render to avoid a flash of the wrong skin.
 document.documentElement.setAttribute("data-theme", localStorage.getItem("ui-theme") || "dark");
+
+// 独立设置窗口标记:用于 CSS 让设置面板不透明(整窗透明度只作用于主面板)。
+try {
+  if (getCurrentWindow().label === "settings") {
+    document.documentElement.setAttribute("data-window", "settings");
+  }
+} catch {
+  // 浏览器预览无 Tauri
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
