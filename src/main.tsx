@@ -311,16 +311,14 @@ function App() {
       const win = getCurrentWindow();
       win
         .onResized(({ payload }) => {
-          if (miniMode) {
-            return; // mini 模式自动缩放,不覆盖保存的完整尺寸
-          }
           window.clearTimeout(saveTimer);
           saveTimer = window.setTimeout(() => {
-            void invoke("save_window_size", { width: payload.width, height: payload.height }).catch(
-              () => {
-                // no-op: 非 Tauri 环境
-              },
-            );
+            // 普通/mini 各自独立记录尺寸
+            void invoke("save_window_geometry", {
+              mini: miniMode,
+              width: payload.width,
+              height: payload.height,
+            }).catch(() => {});
           }, 400);
         })
         .then((fn) => {
@@ -331,7 +329,10 @@ function App() {
         .onMoved(({ payload }) => {
           window.clearTimeout(moveTimer);
           moveTimer = window.setTimeout(() => {
-            void invoke("save_window_position", { x: payload.x, y: payload.y }).catch(() => {});
+            // 普通/mini 各自独立记录位置
+            void invoke("save_window_geometry", { mini: miniMode, x: payload.x, y: payload.y }).catch(
+              () => {},
+            );
           }, 400);
         })
         .then((fn) => {

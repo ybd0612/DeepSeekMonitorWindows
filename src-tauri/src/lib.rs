@@ -1,3 +1,6 @@
+// 持有托盘 mini 菜单项,切换模式后用于同步菜单文案
+struct MiniMenuState(tauri::menu::MenuItem<tauri::Wry>);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     use serde::{Deserialize, Serialize};
@@ -47,6 +50,11 @@ pub fn run() {
         window_y: Option<i32>,
         // mini 模式:主面板仅显示余额/消费/模型用量文本
         mini_mode: bool,
+        // mini 模式独立记忆位置/尺寸,与普通模式互不覆盖
+        mini_width: u32,
+        mini_height: u32,
+        mini_x: Option<i32>,
+        mini_y: Option<i32>,
     }
 
     impl Default for StoredConfig {
@@ -67,6 +75,10 @@ pub fn run() {
                 window_x: None,
                 window_y: None,
                 mini_mode: false,
+                mini_width: 300,
+                mini_height: 70,
+                mini_x: None,
+                mini_y: None,
             }
         }
     }
@@ -236,8 +248,13 @@ pub fn run() {
 
     fn show_main_window(window: &WebviewWindow) {
         let config = read_stored_config().unwrap_or_default();
-        // 恢复上次位置;无记录时首次贴托盘
-        if let (Some(x), Some(y)) = (config.window_x, config.window_y) {
+        // 恢复当前模式上次位置;无记录时首次贴托盘
+        let (px, py) = if config.mini_mode {
+            (config.mini_x, config.mini_y)
+        } else {
+            (config.window_x, config.window_y)
+        };
+        if let (Some(x), Some(y)) = (px, py) {
             let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
         } else {
             let _ = position_near_tray(window);
@@ -401,38 +418,69 @@ pub fn run() {
         Ok(app_config)
     }
 
-    // 记忆窗口尺寸,重启后由 setup 恢复。
+    // 记忆窗口几何:普通/mini 模式各自独立保存位置与尺寸。
+    // x/y 为 Option,只更新传入的字段;mini=true 写入 mini_* 字段。
     #[tauri::command]
-    fn save_window_size(width: u32, height: u32) -> Result<AppConfig, String> {
+    fn save_window_geometry(
+        mini: bool,
+        x: Option<i32>,
+        y: Option<i32>,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<AppConfig, String> {
         let mut config = read_stored_config()?;
-        config.window_width = width;
-        config.window_height = height;
-        write_stored_config(&config)?;
-        to_app_config(config)
-    }
-
-    // 记忆窗口位置(物理像素),显示/重启时恢复到上次位置。
-    #[tauri::command]
-    fn save_window_position(x: i32, y: i32) -> Result<AppConfig, String> {
-        let mut config = read_stored_config()?;
-        config.window_x = Some(x);
-        config.window_y = Some(y);
+        if mini {
+            if let Some(x) = x {
+                config.mini_x = Some(x);
+            }
+            if let Some(y) = y {
+                config.mini_y = Some(y);
+            }
+            if let Some(width) = width {
+                config.mini_width = width;
+            }
+            if let Some(height) = height {
+                config.mini_height = height;
+            }
+        } else {
+            if let Some(x) = x {
+                config.window_x = Some(x);
+            }
+            if let Some(y) = y {
+                config.window_y = Some(y);
+            }
+            if let Some(width) = width {
+                config.window_width = width;
+            }
+            if let Some(height) = height {
+                config.window_height = height;
+            }
+        }
         write_stored_config(&config)?;
         to_app_config(config)
     }
 
     // 迷你模式窗口:紧凑小窗;完整模式恢复保存的尺寸
-    fn apply_mini_window_size(app: &tauri::AppHandle) {
+    // 按当前模式恢复主窗口位置与尺寸(普通/mini 各自独立记录)。
+    // mini 模式下前端测量文字后会自动收紧,这里恢复上次记录的值。
+    fn apply_mode_window_size(app: &tauri::AppHandle) {
         let config = read_stored_config().unwrap_or_default();
         if let Some(window) = app.get_webview_window("main") {
-            if config.mini_mode {
-                // 前端测量文字后会自动收紧;这里给个紧凑的初始尺寸
-                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(300, 70)));
+            let (w, h) = if config.mini_mode {
+                (config.mini_width, config.mini_height)
             } else {
-                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                    config.window_width,
-                    config.window_height,
-                )));
+                (config.window_width, config.window_height)
+            };
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(w, h)));
+            let (px, py) = if config.mini_mode {
+                (config.mini_x, config.mini_y)
+            } else {
+                (config.window_x, config.window_y)
+            };
+            if let (Some(x), Some(y)) = (px, py) {
+                let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+            } else {
+                let _ = position_near_tray(&window);
             }
         }
     }
@@ -444,7 +492,7 @@ pub fn run() {
         config.mini_mode = mini_mode;
         write_stored_config(&config)?;
         let _ = app.emit("mini-mode-changed", mini_mode);
-        apply_mini_window_size(&app);
+        apply_mode_window_size(&app);
         to_app_config(config)
     }
 
@@ -1155,8 +1203,7 @@ pub fn run() {
             save_autostart,
             save_display_settings,
             save_visibility,
-            save_window_size,
-            save_window_position,
+            save_window_geometry,
             save_mini_mode,
             fetch_balance,
             fetch_models,
@@ -1175,9 +1222,19 @@ pub fn run() {
                 )?;
             }
 
+            // 托盘菜单项:mini 项文案按当前模式动态显示
+            let in_mini = read_stored_config()
+                .map(|c| c.mini_mode)
+                .unwrap_or(false);
             let show_item = MenuItem::with_id(app, "show", "显示主面板", true, None::<&str>)?;
             let refresh_item = MenuItem::with_id(app, "refresh", "刷新数据", true, None::<&str>)?;
-            let mini_item = MenuItem::with_id(app, "mini", "切换迷你模式", true, None::<&str>)?;
+            let mini_item = MenuItem::with_id(
+                app,
+                "mini",
+                if in_mini { "切换普通模式" } else { "切换迷你模式" },
+                true,
+                None::<&str>,
+            )?;
             let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let tray_menu = Menu::with_items(
@@ -1208,8 +1265,17 @@ pub fn run() {
                             config.mini_mode = !config.mini_mode;
                             let _ = write_stored_config(&config);
                             let _ = app.emit("mini-mode-changed", config.mini_mode);
-                            apply_mini_window_size(app);
+                            apply_mode_window_size(app);
                             show_main_window(&window);
+                            // 同步托盘菜单文案:mini 中显示「切换普通模式」
+                            if let Some(state) = app.try_state::<MiniMenuState>() {
+                                let label = if config.mini_mode {
+                                    "切换普通模式"
+                                } else {
+                                    "切换迷你模式"
+                                };
+                                let _ = state.0.set_text(label);
+                            }
                         }
                     }
                     "settings" => {
@@ -1245,6 +1311,7 @@ pub fn run() {
             }
 
             tray_builder.build(app)?;
+            app.manage(MiniMenuState(mini_item.clone()));
 
             // 应用已保存的显示设置(置顶/窗口尺寸),避免启动时先闪默认值。
             // 透明度由前端在 documentElement 上以 CSS opacity 应用。
@@ -1252,17 +1319,8 @@ pub fn run() {
                 match read_stored_config() {
                     Ok(config) => {
                         apply_always_on_top(&window, config.always_on_top);
-                        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
-                            config.window_width,
-                            config.window_height,
-                        )));
-                        // 恢复上次位置;首次启动无记录时贴托盘,避免左上角
-                        if let (Some(x), Some(y)) = (config.window_x, config.window_y) {
-                            let _ = window
-                                .set_position(Position::Physical(PhysicalPosition::new(x, y)));
-                        } else {
-                            let _ = position_near_tray(&window);
-                        }
+                        // 按当前模式恢复位置与尺寸(普通/mini 各自独立)
+                        apply_mode_window_size(app.handle());
                     }
                     Err(error) => log::warn!("读取显示设置失败: {error}"),
                 }
