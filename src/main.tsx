@@ -36,6 +36,7 @@ type AppConfig = {
   showChart: boolean;
   windowWidth: number;
   windowHeight: number;
+  miniMode: boolean;
   configPath: string;
 };
 type BalanceData = {
@@ -198,6 +199,7 @@ function App() {
   const [showBalanceCard, setShowBalanceCard] = React.useState(true);
   const [visibleModels, setVisibleModels] = React.useState<string[]>([]);
   const [showChart, setShowChart] = React.useState(true);
+  const [miniMode, setMiniMode] = React.useState(false);
   // 模型列表(来自官方 models 接口),供设置页列出每个模型;空 = 尚未取到
   const [availableModels, setAvailableModels] = React.useState<string[]>([]);
 
@@ -259,6 +261,7 @@ function App() {
         setShowBalanceCard(config.showBalanceCard);
         setVisibleModels(config.visibleModels ?? []);
         setShowChart(config.showChart);
+        setMiniMode(config.miniMode);
         // 整窗透明度只作用于主面板,设置窗口保持实心
         if (!isSettingsWindow) {
           applyWindowOpacity(Math.round((config.windowOpacity ?? 1) * 100));
@@ -353,6 +356,7 @@ function App() {
     let unlistenConfig: (() => void) | undefined;
     let unlistenTheme: (() => void) | undefined;
     let unlistenRefresh: (() => void) | undefined;
+    let unlistenMini: (() => void) | undefined;
     void listen<AppConfig>("display-config-changed", (event) => {
       if (isSettingsWindow) {
         return; // 设置窗口自己已从命令返回值更新状态
@@ -384,16 +388,33 @@ function App() {
         unlistenRefresh = fn;
       })
       .catch(() => {});
+    // mini 模式切换:托盘菜单或设置页触发,两窗口都更新
+    void listen<boolean>("mini-mode-changed", (event) => setMiniMode(event.payload))
+      .then((fn) => {
+        unlistenMini = fn;
+      })
+      .catch(() => {});
     return () => {
       unlistenConfig?.();
       unlistenTheme?.();
       unlistenRefresh?.();
+      unlistenMini?.();
     };
   }, [isSettingsWindow, refreshAll]);
 
   return (
     <div className="stage">
-      {view === "dashboard" && (
+      {!isSettingsWindow && miniMode && (
+        <MiniPanel
+          balance={balance}
+          balanceState={balanceState}
+          balanceError={balanceError}
+          usage={usage}
+          usageState={usageState}
+          usageError={usageError}
+        />
+      )}
+      {!isSettingsWindow && !miniMode && view === "dashboard" && (
         <DashboardPanel
           balance={balance}
           balanceState={balanceState}
@@ -410,7 +431,7 @@ function App() {
           showChart={showChart}
         />
       )}
-      {view === "settings" && (
+      {isSettingsWindow && view === "settings" && (
         <SettingsPanel
           onUsageLoaded={(nextUsage) => {
             setUsage(nextUsage);
@@ -447,7 +468,7 @@ function App() {
           }}
         />
       )}
-      {view === "detail" && (
+      {!isSettingsWindow && !miniMode && view === "detail" && (
         <ModelDetailPanel model={model} usage={usage} usageState={usageState} onBack={() => setView("dashboard")} />
       )}
     </div>
@@ -815,6 +836,7 @@ function SettingsPanel({
   const [theme, setTheme] = React.useState<string>(
     () => localStorage.getItem("ui-theme") || "dark",
   );
+  const [miniMode, setMiniMode] = React.useState(false);
   // 配置加载完成前禁止持久化透明度,避免用默认值覆盖用户已保存的显示设置
   const displayLoadedRef = React.useRef(false);
 
@@ -840,6 +862,7 @@ function SettingsPanel({
         setShowBalanceCard(nextConfig.showBalanceCard);
         setVisibleModels(nextConfig.visibleModels ?? []);
         setShowChart(nextConfig.showChart);
+        setMiniMode(nextConfig.miniMode);
         setStatus(nextConfig.apiKeyConfigured ? `已配置 ${nextConfig.apiKeyPreview}` : "未配置 API Key");
         setUsageStatus(nextConfig.usageTokenConfigured ? "用量 Token 已配置" : "未配置用量 Token");
         displayLoadedRef.current = true;
@@ -1144,6 +1167,33 @@ function SettingsPanel({
     [allModels, persistVisibility, showBalanceCard, showChart, visibleModels],
   );
 
+  // 迷你模式:托盘菜单或本窗口切换都会同步
+  const saveMiniMode = React.useCallback(
+    (enabled: boolean) => {
+      const previous = miniMode;
+      setMiniMode(enabled);
+      void invoke<AppConfig>("save_mini_mode", { miniMode: enabled })
+        .then((nextConfig) => {
+          setConfig(nextConfig);
+          setMiniMode(nextConfig.miniMode);
+        })
+        .catch(() => setMiniMode(previous));
+    },
+    [miniMode],
+  );
+
+  React.useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<boolean>("mini-mode-changed", (event) => setMiniMode(event.payload))
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   return (
     <section className="settings-panel" data-testid="settings-panel">
       <button className="floating-close settings-close" onClick={onBack} aria-label="返回主面板">
@@ -1278,6 +1328,9 @@ function SettingsPanel({
                 </button>
               ))}
             </div>
+          </div>
+          <div className="settings-block">
+            <Toggle label="迷你模式(简洁文字面板)" checked={miniMode} onChange={saveMiniMode} />
           </div>
           <div className="settings-block">
             <p className="muted">窗口透明度(含文字,可透视桌面)</p>
@@ -1502,6 +1555,76 @@ function ModelDetailPanel({
           </div>
         )}
       </article>
+    </section>
+  );
+}
+
+function MiniRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mini-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+// mini 模式:主面板仅显示余额/消费/模型用量,全部直接文字。
+// 模型取当日用量最高的一个。
+function MiniPanel({
+  balance,
+  balanceState,
+  balanceError,
+  usage,
+  usageState,
+  usageError,
+}: {
+  balance: BalanceData | null;
+  balanceState: BalanceState;
+  balanceError: string;
+  usage: UsageResult | null;
+  usageState: BalanceState;
+  usageError: string;
+}) {
+  const today = usage?.days.find((day) => day.date === todayStr()) ?? null;
+  const todayModels = today?.models ?? [];
+
+  let topKey: string | null = null;
+  let topTotal = -1;
+  for (const item of todayModels) {
+    const total = item.cacheHit + item.cacheMiss + item.response;
+    if (total > topTotal) {
+      topTotal = total;
+      topKey = item.key;
+    }
+  }
+
+  const modelData = today?.models.find((item) => item.key === topKey) ?? null;
+  const modelName = usage?.models.find((item) => item.key === topKey)?.name ?? null;
+  const input = (modelData?.cacheHit ?? 0) + (modelData?.cacheMiss ?? 0);
+  const hit = modelData?.cacheHit ?? 0;
+  const miss = modelData?.cacheMiss ?? 0;
+  const output = modelData?.response ?? 0;
+  const hitRate = hit + miss > 0 ? (hit / (hit + miss)) * 100 : 0;
+
+  const symbol = balance?.currency === "USD" ? "$" : "¥";
+  const balanceText = balanceState === "ok" ? `${symbol}${balance?.totalBalance ?? "0.00"}` : "—";
+  const todayCost = usageState === "ok" && today ? fmtMoney(today.totalCost) : "—";
+  const monthCost = usageState === "ok" && usage ? fmtMoney(usage.monthCost) : "—";
+  const errorText =
+    usageState === "error" ? usageError : balanceState === "error" ? balanceError : "";
+
+  return (
+    <section className="panel mini-panel">
+      <header className="mini-drag" data-tauri-drag-region />
+      {errorText && <div className="mini-error">{errorText}</div>}
+      <MiniRow label="余额" value={balanceText} />
+      <MiniRow label="当日消费" value={todayCost} />
+      <MiniRow label="本月消费" value={monthCost} />
+      {modelName && <div className="mini-model-title">{modelName}</div>}
+      <MiniRow label="当日输入" value={fmtTokensShort(input)} />
+      <MiniRow label="输入命中缓存" value={fmtTokensShort(hit)} />
+      <MiniRow label="输出" value={fmtTokensShort(output)} />
+      <MiniRow label="命中率" value={`${hitRate.toFixed(2)}%`} />
     </section>
   );
 }

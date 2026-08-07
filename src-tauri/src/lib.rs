@@ -45,6 +45,8 @@ pub fn run() {
         // 记忆上次窗口位置;None = 尚未定位,回退贴托盘
         window_x: Option<i32>,
         window_y: Option<i32>,
+        // mini 模式:主面板仅显示余额/消费/模型用量文本
+        mini_mode: bool,
     }
 
     impl Default for StoredConfig {
@@ -64,6 +66,7 @@ pub fn run() {
                 window_height: 600,
                 window_x: None,
                 window_y: None,
+                mini_mode: false,
             }
         }
     }
@@ -84,6 +87,7 @@ pub fn run() {
         show_chart: bool,
         window_width: u32,
         window_height: u32,
+        mini_mode: bool,
         config_path: String,
     }
 
@@ -171,6 +175,7 @@ pub fn run() {
             show_chart: config.show_chart,
             window_width: config.window_width,
             window_height: config.window_height,
+            mini_mode: config.mini_mode,
             config_path: path.to_string_lossy().to_string(),
         })
     }
@@ -413,6 +418,16 @@ pub fn run() {
         config.window_x = Some(x);
         config.window_y = Some(y);
         write_stored_config(&config)?;
+        to_app_config(config)
+    }
+
+    // 切换 mini 模式(主面板仅文本简洁显示),广播给所有窗口实时切换。
+    #[tauri::command]
+    fn save_mini_mode(app: tauri::AppHandle, mini_mode: bool) -> Result<AppConfig, String> {
+        let mut config = read_stored_config()?;
+        config.mini_mode = mini_mode;
+        write_stored_config(&config)?;
+        let _ = app.emit("mini-mode-changed", mini_mode);
         to_app_config(config)
     }
 
@@ -1125,6 +1140,7 @@ pub fn run() {
             save_visibility,
             save_window_size,
             save_window_position,
+            save_mini_mode,
             fetch_balance,
             fetch_models,
             save_usage_token,
@@ -1144,10 +1160,13 @@ pub fn run() {
 
             let show_item = MenuItem::with_id(app, "show", "显示主面板", true, None::<&str>)?;
             let refresh_item = MenuItem::with_id(app, "refresh", "刷新数据", true, None::<&str>)?;
+            let mini_item = MenuItem::with_id(app, "mini", "切换迷你模式", true, None::<&str>)?;
             let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let tray_menu =
-                Menu::with_items(app, &[&show_item, &refresh_item, &settings_item, &quit_item])?;
+            let tray_menu = Menu::with_items(
+                app,
+                &[&show_item, &refresh_item, &mini_item, &settings_item, &quit_item],
+            )?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&tray_menu)
@@ -1162,6 +1181,16 @@ pub fn run() {
                     "refresh" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = app.emit("refresh-data", ());
+                            show_main_window(&window);
+                        }
+                    }
+                    "mini" => {
+                        // 翻转 mini 模式并持久化,广播给主窗口实时切换
+                        if let Some(window) = app.get_webview_window("main") {
+                            let mut config = read_stored_config().unwrap_or_default();
+                            config.mini_mode = !config.mini_mode;
+                            let _ = write_stored_config(&config);
+                            let _ = app.emit("mini-mode-changed", config.mini_mode);
                             show_main_window(&window);
                         }
                     }
