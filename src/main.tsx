@@ -277,13 +277,16 @@ function App() {
       .catch(() => {});
   }, []);
 
-  // 记住用户拖拽后的窗口尺寸,写入配置供 Rust setup 恢复。
+  // 记住用户拖拽后的窗口尺寸与位置,写入配置供 Rust 显示/重启时恢复。
   // 浏览器预览模式下没有 Tauri 窗口,静默跳过。
   React.useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlistenResize: (() => void) | undefined;
+    let unlistenMove: (() => void) | undefined;
     let saveTimer: number | undefined;
+    let moveTimer: number | undefined;
     try {
-      getCurrentWindow()
+      const win = getCurrentWindow();
+      win
         .onResized(({ payload }) => {
           window.clearTimeout(saveTimer);
           saveTimer = window.setTimeout(() => {
@@ -294,18 +297,29 @@ function App() {
             );
           }, 400);
         })
-        .then((unlistenFn) => {
-          unlisten = unlistenFn;
+        .then((fn) => {
+          unlistenResize = fn;
         })
-        .catch(() => {
-          // no-op: 非 Tauri 环境
-        });
+        .catch(() => {});
+      win
+        .onMoved(({ payload }) => {
+          window.clearTimeout(moveTimer);
+          moveTimer = window.setTimeout(() => {
+            void invoke("save_window_position", { x: payload.x, y: payload.y }).catch(() => {});
+          }, 400);
+        })
+        .then((fn) => {
+          unlistenMove = fn;
+        })
+        .catch(() => {});
     } catch {
       // 浏览器预览无 Tauri 窗口,静默跳过
     }
     return () => {
       window.clearTimeout(saveTimer);
-      unlisten?.();
+      window.clearTimeout(moveTimer);
+      unlistenResize?.();
+      unlistenMove?.();
     };
   }, []);
 
@@ -334,6 +348,12 @@ function App() {
       setVisibleModels(event.payload.visibleModels ?? []);
       setShowChart(event.payload.showChart);
       applyWindowOpacity(Math.round((event.payload.windowOpacity ?? 1) * 100));
+      // 置顶由前端窗口 API 直接再断言,双保险确保生效
+      try {
+        void getCurrentWindow().setAlwaysOnTop(event.payload.alwaysOnTop).catch(() => {});
+      } catch {
+        // 浏览器预览无 Tauri
+      }
     })
       .then((fn) => {
         unlistenConfig = fn;
@@ -1116,15 +1136,15 @@ function SettingsPanel({
       <button className="floating-close settings-close" onClick={onBack} aria-label="返回主面板">
         <X size={20} />
       </button>
-      <div className="settings-inner">
-        <header className="settings-header" data-tauri-drag-region>
-          <BrandIcon size={42} />
-          <div>
-            <h1>DeepSeek Monitor</h1>
-            <p>设置</p>
-          </div>
-        </header>
+      <header className="settings-header" data-tauri-drag-region>
+        <BrandIcon size={42} />
+        <div>
+          <h1>DeepSeek Monitor</h1>
+          <p>设置</p>
+        </div>
+      </header>
 
+      <div className="settings-inner">
         <SettingsSection icon={<KeyRound size={15} />} title="API Key">
           <p>用于调用 DeepSeek API 获取余额和用量数据。当前 Windows 版本会保存在应用本地设置中。</p>
           <p className="muted">API Key 只在当前这台 Windows 电脑本地保留。</p>

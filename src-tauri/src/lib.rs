@@ -38,6 +38,9 @@ pub fn run() {
         show_chart: bool,
         window_width: u32,
         window_height: u32,
+        // 记忆上次窗口位置;None = 尚未定位,回退贴托盘
+        window_x: Option<i32>,
+        window_y: Option<i32>,
     }
 
     impl Default for StoredConfig {
@@ -55,6 +58,8 @@ pub fn run() {
                 show_chart: true,
                 window_width: 356,
                 window_height: 600,
+                window_x: None,
+                window_y: None,
             }
         }
     }
@@ -192,14 +197,16 @@ pub fn run() {
     }
 
     fn show_main_window(window: &WebviewWindow) {
-        let _ = position_near_tray(window);
+        let config = read_stored_config().unwrap_or_default();
+        // 恢复上次位置;无记录时首次贴托盘
+        if let (Some(x), Some(y)) = (config.window_x, config.window_y) {
+            let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+        } else {
+            let _ = position_near_tray(window);
+        }
         let _ = window.show();
-        // Windows 在窗口隐藏/重新显示后可能丢失 WS_EX_TOPMOST,
-        // 每次显示都按配置重新断言置顶,避免“开了置顶却有时不置顶”。
-        let on_top = read_stored_config()
-            .map(|config| config.always_on_top)
-            .unwrap_or(false);
-        let _ = window.set_always_on_top(on_top);
+        // Windows 在窗口隐藏/重新显示后可能丢失 WS_EX_TOPMOST,每次显示重新断言置顶
+        let _ = window.set_always_on_top(config.always_on_top);
         let _ = window.set_focus();
     }
 
@@ -362,6 +369,16 @@ pub fn run() {
         let mut config = read_stored_config()?;
         config.window_width = width;
         config.window_height = height;
+        write_stored_config(&config)?;
+        to_app_config(config)
+    }
+
+    // 记忆窗口位置(物理像素),显示/重启时恢复到上次位置。
+    #[tauri::command]
+    fn save_window_position(x: i32, y: i32) -> Result<AppConfig, String> {
+        let mut config = read_stored_config()?;
+        config.window_x = Some(x);
+        config.window_y = Some(y);
         write_stored_config(&config)?;
         to_app_config(config)
     }
@@ -1074,6 +1091,7 @@ pub fn run() {
             save_display_settings,
             save_visibility,
             save_window_size,
+            save_window_position,
             fetch_balance,
             fetch_models,
             save_usage_token,
@@ -1158,6 +1176,13 @@ pub fn run() {
                             config.window_width,
                             config.window_height,
                         )));
+                        // 恢复上次位置;首次启动无记录时贴托盘,避免左上角
+                        if let (Some(x), Some(y)) = (config.window_x, config.window_y) {
+                            let _ = window
+                                .set_position(Position::Physical(PhysicalPosition::new(x, y)));
+                        } else {
+                            let _ = position_near_tray(&window);
+                        }
                     }
                     Err(error) => log::warn!("读取显示设置失败: {error}"),
                 }
