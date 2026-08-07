@@ -33,8 +33,8 @@ pub fn run() {
         window_opacity: f64,
         always_on_top: bool,
         show_balance_card: bool,
-        show_flash_row: bool,
-        show_pro_row: bool,
+        // 模型显示:空列表 = 全部显示。由模型列表接口动态驱动,不写死 flash/pro。
+        visible_models: Vec<String>,
         show_chart: bool,
         window_width: u32,
         window_height: u32,
@@ -51,8 +51,7 @@ pub fn run() {
                 window_opacity: 1.0,
                 always_on_top: false,
                 show_balance_card: true,
-                show_flash_row: true,
-                show_pro_row: true,
+                visible_models: Vec::new(),
                 show_chart: true,
                 window_width: 356,
                 window_height: 600,
@@ -72,8 +71,7 @@ pub fn run() {
         window_opacity: f64,
         always_on_top: bool,
         show_balance_card: bool,
-        show_flash_row: bool,
-        show_pro_row: bool,
+        visible_models: Vec<String>,
         show_chart: bool,
         window_width: u32,
         window_height: u32,
@@ -160,8 +158,7 @@ pub fn run() {
             window_opacity: config.window_opacity,
             always_on_top: config.always_on_top,
             show_balance_card: config.show_balance_card,
-            show_flash_row: config.show_flash_row,
-            show_pro_row: config.show_pro_row,
+            visible_models: config.visible_models,
             show_chart: config.show_chart,
             window_width: config.window_width,
             window_height: config.window_height,
@@ -334,20 +331,18 @@ pub fn run() {
         Ok(app_config)
     }
 
-    // 主面板区块显示开关:余额卡 / Flash 行 / Pro 行 / 缓存图表。
-    // 持久化后广播给主窗口,主面板实时增删区块。
+    // 主面板区块显示开关:余额卡 / 可见模型列表 / 缓存图表。
+    // visible_models 为空 = 显示全部模型。持久化后广播给主窗口实时增删。
     #[tauri::command]
     fn save_visibility(
         app: tauri::AppHandle,
         show_balance_card: bool,
-        show_flash_row: bool,
-        show_pro_row: bool,
+        visible_models: Vec<String>,
         show_chart: bool,
     ) -> Result<AppConfig, String> {
         let mut config = read_stored_config()?;
         config.show_balance_card = show_balance_card;
-        config.show_flash_row = show_flash_row;
-        config.show_pro_row = show_pro_row;
+        config.visible_models = visible_models;
         config.show_chart = show_chart;
         write_stored_config(&config)?;
         let app_config = to_app_config(config)?;
@@ -432,6 +427,66 @@ pub fn run() {
             granted_balance: info.granted_balance,
             topped_up_balance: info.topped_up_balance,
         })
+    }
+
+    // 模型 ID 转友好显示名:"deepseek-v4-flash" -> "V4 Flash"。
+    // 去掉 deepseek- 前缀,按 - 分段、首字母大写,不做硬编码映射。
+    fn model_display_name(model_id: &str) -> String {
+        let stripped = model_id.strip_prefix("deepseek-").unwrap_or(model_id);
+        stripped
+            .split('-')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) if first.is_ascii_alphabetic() => {
+                        first.to_uppercase().collect::<String>() + chars.as_str()
+                    }
+                    _ => part.to_string(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    // 拉取 DeepSeek 官方模型列表接口,供设置页动态列出用户可用模型,不写死模型。
+    #[tauri::command]
+    async fn fetch_models() -> Result<Vec<String>, String> {
+        let config = read_stored_config()?;
+        let api_key = config
+            .api_key
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "未配置 API Key".to_string())?;
+
+        let client = reqwest::Client::new();
+        let response = client
+            .get("https://api.deepseek.com/models")
+            .bearer_auth(&api_key)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .map_err(|error| format!("网络请求失败：{error}"))?;
+
+        match response.status().as_u16() {
+            200 => {}
+            401 => return Err("API Key 无效或已过期".to_string()),
+            code => return Err(format!("获取模型列表失败：HTTP {code}")),
+        }
+
+        #[derive(Deserialize)]
+        struct ModelItem {
+            id: String,
+        }
+        #[derive(Deserialize)]
+        struct ModelsResponse {
+            data: Vec<ModelItem>,
+        }
+
+        let data: ModelsResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("解析模型列表失败：{error}"))?;
+        Ok(data.data.into_iter().map(|item| item.id).collect())
     }
 
     #[tauri::command]
@@ -775,16 +830,18 @@ pub fn run() {
 
     #[derive(Debug, Serialize)]
     #[serde(rename_all = "camelCase")]
+    struct UsageModelDaily {
+        key: String,
+        cache_hit: u64,
+        cache_miss: u64,
+        response: u64,
+    }
+
+    #[derive(Debug, Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct UsageDaySummary {
         date: String,
-        flash_tokens: u64,
-        flash_cache_hit: u64,
-        flash_cache_miss: u64,
-        flash_response: u64,
-        pro_tokens: u64,
-        pro_cache_hit: u64,
-        pro_cache_miss: u64,
-        pro_response: u64,
+        models: Vec<UsageModelDaily>,
         total_tokens: u64,
         total_cost: f64,
     }
@@ -932,26 +989,20 @@ pub fn run() {
                 .unwrap_or(0.0)
         };
 
+        // 模型列表不写死:凡是平台用量接口返回的模型都展示,key=模型 ID
         let mut models = Vec::new();
         for model_usage in &amount.data.biz_data.total {
-            let label = match model_usage.model.as_str() {
-                "deepseek-v4-flash" => Some(("flash", "V4 Flash")),
-                "deepseek-v4-pro" => Some(("pro", "V4 Pro")),
-                _ => None,
-            };
-            if let Some((key, name)) = label {
-                let (total, request, hit, miss, response) = token_breakdown(&model_usage.usage);
-                models.push(UsageModelSummary {
-                    key: key.to_string(),
-                    name: name.to_string(),
-                    total_tokens: total,
-                    request_count: request,
-                    cache_hit_tokens: hit,
-                    cache_miss_tokens: miss,
-                    response_tokens: response,
-                    cost: cost_for_model(&model_usage.model),
-                });
-            }
+            let (total, request, hit, miss, response) = token_breakdown(&model_usage.usage);
+            models.push(UsageModelSummary {
+                key: model_usage.model.clone(),
+                name: model_display_name(&model_usage.model),
+                total_tokens: total,
+                request_count: request,
+                cache_hit_tokens: hit,
+                cache_miss_tokens: miss,
+                response_tokens: response,
+                cost: cost_for_model(&model_usage.model),
+            });
         }
 
         let mut cost_by_date: std::collections::HashMap<String, f64> =
@@ -965,44 +1016,21 @@ pub fn run() {
 
         let mut days = Vec::new();
         for day in &amount.data.biz_data.days {
-            let mut flash = 0u64;
-            let mut flash_hit = 0u64;
-            let mut flash_miss = 0u64;
-            let mut flash_resp = 0u64;
-            let mut pro = 0u64;
-            let mut pro_hit = 0u64;
-            let mut pro_miss = 0u64;
-            let mut pro_resp = 0u64;
             let mut total = 0u64;
+            let mut model_days = Vec::new();
             for model_usage in &day.data {
                 let (tokens, _, hit, miss, response) = token_breakdown(&model_usage.usage);
                 total += tokens;
-                match model_usage.model.as_str() {
-                    "deepseek-v4-flash" => {
-                        flash += tokens;
-                        flash_hit += hit;
-                        flash_miss += miss;
-                        flash_resp += response;
-                    }
-                    "deepseek-v4-pro" => {
-                        pro += tokens;
-                        pro_hit += hit;
-                        pro_miss += miss;
-                        pro_resp += response;
-                    }
-                    _ => {}
-                }
+                model_days.push(UsageModelDaily {
+                    key: model_usage.model.clone(),
+                    cache_hit: hit,
+                    cache_miss: miss,
+                    response,
+                });
             }
             days.push(UsageDaySummary {
                 date: day.date.clone(),
-                flash_tokens: flash,
-                flash_cache_hit: flash_hit,
-                flash_cache_miss: flash_miss,
-                flash_response: flash_resp,
-                pro_tokens: pro,
-                pro_cache_hit: pro_hit,
-                pro_cache_miss: pro_miss,
-                pro_response: pro_resp,
+                models: model_days,
                 total_tokens: total,
                 total_cost: cost_by_date.get(&day.date).copied().unwrap_or(0.0),
             });
@@ -1041,6 +1069,7 @@ pub fn run() {
             save_visibility,
             save_window_size,
             fetch_balance,
+            fetch_models,
             save_usage_token,
             clear_usage_token,
             fetch_usage,

@@ -6,7 +6,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   BarChart3,
-  Brain,
   CalendarDays,
   CheckCircle2,
   Clipboard,
@@ -23,7 +22,6 @@ import {
 import "./styles.css";
 
 type ViewName = "dashboard" | "settings" | "detail";
-type ModelName = "flash" | "pro";
 type AppConfig = {
   apiKeyConfigured: boolean;
   apiKeyPreview: string | null;
@@ -34,8 +32,7 @@ type AppConfig = {
   windowOpacity: number;
   alwaysOnTop: boolean;
   showBalanceCard: boolean;
-  showFlashRow: boolean;
-  showProRow: boolean;
+  visibleModels: string[];
   showChart: boolean;
   windowWidth: number;
   windowHeight: number;
@@ -60,16 +57,15 @@ type UsageModel = {
   responseTokens: number;
   cost: number;
 };
+type UsageModelDaily = {
+  key: string;
+  cacheHit: number;
+  cacheMiss: number;
+  response: number;
+};
 type UsageDay = {
   date: string;
-  flashTokens: number;
-  flashCacheHit: number;
-  flashCacheMiss: number;
-  flashResponse: number;
-  proTokens: number;
-  proCacheHit: number;
-  proCacheMiss: number;
-  proResponse: number;
+  models: UsageModelDaily[];
   totalTokens: number;
   totalCost: number;
 };
@@ -110,14 +106,7 @@ const recentUsageDays = (days: UsageDay[], count = 7): UsageDay[] => {
     return (
       source.get(date) ?? {
         date,
-        flashTokens: 0,
-        flashCacheHit: 0,
-        flashCacheMiss: 0,
-        flashResponse: 0,
-        proTokens: 0,
-        proCacheHit: 0,
-        proCacheMiss: 0,
-        proResponse: 0,
+        models: [],
         totalTokens: 0,
         totalCost: 0,
       }
@@ -174,6 +163,16 @@ const applyWindowOpacity = (percent: number) => {
   document.documentElement.style.opacity = String(clamped / 100);
 };
 
+// 模型行强调色:按模型 ID 哈希到一组色相,不写死 flash/pro 配色
+const modelAccent = (key: string) => {
+  let hash = 0;
+  for (const ch of key) {
+    hash = (hash * 31 + ch.charCodeAt(0)) | 0;
+  }
+  const hues = [205, 275, 145, 25, 330, 210, 190, 45];
+  return `hsl(${hues[Math.abs(hash) % hues.length]} 72% 60%)`;
+};
+
 function App() {
   // 独立设置窗口(label="settings")只渲染设置页;主窗口渲染仪表盘/详情。
   // 浏览器预览无 Tauri,回退为主窗口视图。
@@ -185,7 +184,7 @@ function App() {
     }
   });
   const [view, setView] = React.useState<ViewName>(isSettingsWindow ? "settings" : "dashboard");
-  const [model, setModel] = React.useState<ModelName>("flash");
+  const [model, setModel] = React.useState<string>("");
 
   const [balance, setBalance] = React.useState<BalanceData | null>(null);
   const [balanceState, setBalanceState] = React.useState<BalanceState>("loading");
@@ -197,9 +196,10 @@ function App() {
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] = React.useState(60);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = React.useState(false);
   const [showBalanceCard, setShowBalanceCard] = React.useState(true);
-  const [showFlashRow, setShowFlashRow] = React.useState(true);
-  const [showProRow, setShowProRow] = React.useState(true);
+  const [visibleModels, setVisibleModels] = React.useState<string[]>([]);
   const [showChart, setShowChart] = React.useState(true);
+  // 模型列表(来自官方 models 接口),供设置页列出每个模型;空 = 尚未取到
+  const [availableModels, setAvailableModels] = React.useState<string[]>([]);
 
   const loadBalance = React.useCallback(() => {
     setBalanceState("loading");
@@ -249,8 +249,7 @@ function App() {
         setRefreshIntervalSeconds(config.refreshIntervalSeconds || 60);
         setAutoRefreshEnabled(config.autoRefreshEnabled);
         setShowBalanceCard(config.showBalanceCard);
-        setShowFlashRow(config.showFlashRow);
-        setShowProRow(config.showProRow);
+        setVisibleModels(config.visibleModels ?? []);
         setShowChart(config.showChart);
         // 整窗透明度只作用于主面板,设置窗口保持实心
         if (!isSettingsWindow) {
@@ -265,6 +264,16 @@ function App() {
         }
       });
   }, [isSettingsWindow]);
+
+  // 拉取官方模型列表,供设置页选择要显示的模型;失败(如未配置 Key)留空,
+  // 设置页会回退到用量数据中实际出现的模型。
+  React.useEffect(() => {
+    void invoke<string[]>("fetch_models")
+      .then((models) => {
+        setAvailableModels(Array.isArray(models) ? models : []);
+      })
+      .catch(() => {});
+  }, []);
 
   // 记住用户拖拽后的窗口尺寸,写入配置供 Rust setup 恢复。
   // 浏览器预览模式下没有 Tauri 窗口,静默跳过。
@@ -320,8 +329,7 @@ function App() {
         return; // 设置窗口自己已从命令返回值更新状态
       }
       setShowBalanceCard(event.payload.showBalanceCard);
-      setShowFlashRow(event.payload.showFlashRow);
-      setShowProRow(event.payload.showProRow);
+      setVisibleModels(event.payload.visibleModels ?? []);
       setShowChart(event.payload.showChart);
       applyWindowOpacity(Math.round((event.payload.windowOpacity ?? 1) * 100));
     })
@@ -363,8 +371,7 @@ function App() {
             setView("detail");
           }}
           showBalanceCard={showBalanceCard}
-          showFlashRow={showFlashRow}
-          showProRow={showProRow}
+          visibleModels={visibleModels}
           showChart={showChart}
         />
       )}
@@ -382,10 +389,11 @@ function App() {
           }}
           onRefreshIntervalChanged={setRefreshIntervalSeconds}
           onAutoRefreshChanged={setAutoRefreshEnabled}
-          onVisibilityChanged={({ showBalanceCard: b, showFlashRow: f, showProRow: p, showChart: c }) => {
+          availableModels={availableModels}
+          usageModelKeys={(usage?.models ?? []).map((item) => item.key)}
+          onVisibilityChanged={({ showBalanceCard: b, visibleModels: v, showChart: c }) => {
             setShowBalanceCard(b);
-            setShowFlashRow(f);
-            setShowProRow(p);
+            setVisibleModels(v);
             setShowChart(c);
           }}
           onBack={() => {
@@ -426,8 +434,7 @@ function DashboardPanel({
   usageError,
   onDetail,
   showBalanceCard,
-  showFlashRow,
-  showProRow,
+  visibleModels,
   showChart,
 }: {
   balance: BalanceData | null;
@@ -436,15 +443,15 @@ function DashboardPanel({
   usage: UsageResult | null;
   usageState: BalanceState;
   usageError: string;
-  onDetail: (model: ModelName) => void;
+  onDetail: (model: string) => void;
   showBalanceCard: boolean;
-  showFlashRow: boolean;
-  showProRow: boolean;
+  visibleModels: string[];
   showChart: boolean;
 }) {
-  const flash = usage?.models.find((item) => item.key === "flash") ?? null;
-  const pro = usage?.models.find((item) => item.key === "pro") ?? null;
-  const maxTokens = Math.max(flash?.totalTokens ?? 0, pro?.totalTokens ?? 0, 1);
+  // 模型行由用量数据驱动:空 visibleModels = 全部显示
+  const visibleKeys = visibleModels.length > 0 ? new Set(visibleModels) : null;
+  const modelRows = (usage?.models ?? []).filter((item) => (visibleKeys ? visibleKeys.has(item.key) : true));
+  const maxTokens = Math.max(...modelRows.map((item) => item.totalTokens), 1);
   const today = usage?.days.find((day) => day.date === todayStr()) ?? null;
   const todayCost = usageState === "ok" && today ? today.totalCost : null;
   const monthCost = usageState === "ok" && usage ? usage.monthCost : null;
@@ -468,32 +475,27 @@ function DashboardPanel({
         />
       )}
 
-      {(showFlashRow || showProRow) && (
+      {modelRows.length > 0 && (
         <div className="usage-stack">
-          {showFlashRow && (
+          {modelRows.map((item) => (
             <UsageRow
-              modelKey="flash"
-              data={flash}
+              key={item.key}
+              data={item}
+              accent={modelAccent(item.key)}
               maxTokens={maxTokens}
               state={usageState}
-              onClick={() => onDetail("flash")}
+              onClick={() => onDetail(item.key)}
             />
-          )}
-          {showProRow && (
-            <UsageRow
-              modelKey="pro"
-              data={pro}
-              maxTokens={maxTokens}
-              state={usageState}
-              onClick={() => onDetail("pro")}
-            />
-          )}
+          ))}
         </div>
+      )}
+      {modelRows.length === 0 && usageState === "loading" && (
+        <div className="chart-placeholder">模型用量查询中…</div>
       )}
 
       {showChart && <UsageChart usage={usage} state={usageState} error={usageError} />}
 
-      {!showBalanceCard && !showFlashRow && !showProRow && !showChart && (
+      {!showBalanceCard && modelRows.length === 0 && !showChart && (
         <div className="chart-placeholder">已隐藏全部区块,可在设置中恢复显示</div>
       )}
     </section>
@@ -560,20 +562,18 @@ function BalanceCard({
 }
 
 function UsageRow({
-  modelKey,
   data,
+  accent,
   maxTokens,
   state,
   onClick,
 }: {
-  modelKey: ModelName;
   data: UsageModel | null;
+  accent: string;
   maxTokens: number;
   state: BalanceState;
   onClick: () => void;
 }) {
-  const isFlash = modelKey === "flash";
-  const name = isFlash ? "V4 Flash" : "V4 Pro";
   const tokensText = data
     ? `${fmtInt(data.totalTokens)} Tokens`
     : state === "loading"
@@ -589,19 +589,19 @@ function UsageRow({
 
   return (
     <button className="card usage-row" onClick={onClick}>
-      <div className={`model-badge ${isFlash ? "flash" : "pro"}`}>
-        {isFlash ? <Zap size={27} fill="currentColor" /> : <Brain size={25} />}
+      <div className="model-badge" style={{ color: accent, background: `${accent}22` }}>
+        <Zap size={27} fill="currentColor" />
       </div>
       <div className="usage-main">
-        <h2>{name}</h2>
+        <h2>{data?.name ?? "模型"}</h2>
         <div className="token-line">
           <span>{tokensText}</span>
           <div className="progress-track">
-            <i className={isFlash ? "flash-fill" : "pro-fill"} style={{ width }} />
+            <i style={{ width, background: accent }} />
           </div>
         </div>
         {data && data.cacheHitTokens + data.cacheMissTokens > 0 && (
-          <span className={`cache-hit-rate ${isFlash ? "flash" : "pro"}`}>
+          <span className="cache-hit-rate" style={{ color: accent }}>
             缓存命中{" "}
             {((data.cacheHitTokens / (data.cacheHitTokens + data.cacheMissTokens)) * 100).toFixed(0)}%
           </span>
@@ -628,10 +628,10 @@ function UsageChart({
   const MIN_BAR = 3;
   const days = recentUsageDays(usage?.days ?? []);
   const points = days.map((day) => {
-    // Flash 与 Pro 合并，不分模型
-    const hit = day.flashCacheHit + day.proCacheHit;
-    const miss = day.flashCacheMiss + day.proCacheMiss;
-    const response = day.flashResponse + day.proResponse;
+    // 全模型聚合,不分模型
+    const hit = day.models.reduce((sum, item) => sum + item.cacheHit, 0);
+    const miss = day.models.reduce((sum, item) => sum + item.cacheMiss, 0);
+    const response = day.models.reduce((sum, item) => sum + item.response, 0);
     return { date: day.date, hit, miss, response, total: hit + miss + response };
   });
   const maxVal = Math.max(...points.map((point) => point.total), 1);
@@ -743,6 +743,8 @@ function SettingsPanel({
   onRefreshIntervalChanged,
   onAutoRefreshChanged,
   onVisibilityChanged,
+  availableModels,
+  usageModelKeys,
 }: {
   onBack: () => void;
   onUsageLoaded: (usage: UsageResult) => void;
@@ -751,10 +753,11 @@ function SettingsPanel({
   onAutoRefreshChanged: (enabled: boolean) => void;
   onVisibilityChanged: (visibility: {
     showBalanceCard: boolean;
-    showFlashRow: boolean;
-    showProRow: boolean;
+    visibleModels: string[];
     showChart: boolean;
   }) => void;
+  availableModels: string[];
+  usageModelKeys: string[];
 }) {
   const [apiKey, setApiKey] = React.useState("");
   const [config, setConfig] = React.useState<AppConfig | null>(null);
@@ -771,8 +774,7 @@ function SettingsPanel({
   const [opacity, setOpacity] = React.useState(100);
   const [alwaysOnTop, setAlwaysOnTop] = React.useState(false);
   const [showBalanceCard, setShowBalanceCard] = React.useState(true);
-  const [showFlashRow, setShowFlashRow] = React.useState(true);
-  const [showProRow, setShowProRow] = React.useState(true);
+  const [visibleModels, setVisibleModels] = React.useState<string[]>([]);
   const [showChart, setShowChart] = React.useState(true);
   const [theme, setTheme] = React.useState<string>(
     () => localStorage.getItem("ui-theme") || "dark",
@@ -800,8 +802,7 @@ function SettingsPanel({
         setOpacity(Math.round((nextConfig.windowOpacity ?? 1) * 100));
         setAlwaysOnTop(nextConfig.alwaysOnTop);
         setShowBalanceCard(nextConfig.showBalanceCard);
-        setShowFlashRow(nextConfig.showFlashRow);
-        setShowProRow(nextConfig.showProRow);
+        setVisibleModels(nextConfig.visibleModels ?? []);
         setShowChart(nextConfig.showChart);
         setStatus(nextConfig.apiKeyConfigured ? `已配置 ${nextConfig.apiKeyPreview}` : "未配置 API Key");
         setUsageStatus(nextConfig.usageTokenConfigured ? "用量 Token 已配置" : "未配置用量 Token");
@@ -1042,36 +1043,68 @@ function SettingsPanel({
     [opacity, persistDisplay],
   );
 
-  const saveVisibility = React.useCallback(
-    (key: "showBalanceCard" | "showFlashRow" | "showProRow" | "showChart", value: boolean) => {
-      const next = {
-        showBalanceCard: key === "showBalanceCard" ? value : showBalanceCard,
-        showFlashRow: key === "showFlashRow" ? value : showFlashRow,
-        showProRow: key === "showProRow" ? value : showProRow,
-        showChart: key === "showChart" ? value : showChart,
-      };
+  // 统一持久化可见性配置(余额卡 / 可见模型列表 / 图表),成功后同步回本地与父级
+  const persistVisibility = React.useCallback(
+    (next: { showBalanceCard: boolean; visibleModels: string[]; showChart: boolean }) => {
       void invoke<AppConfig>("save_visibility", next)
         .then((nextConfig) => {
           setConfig(nextConfig);
           setShowBalanceCard(nextConfig.showBalanceCard);
-          setShowFlashRow(nextConfig.showFlashRow);
-          setShowProRow(nextConfig.showProRow);
+          setVisibleModels(nextConfig.visibleModels ?? []);
           setShowChart(nextConfig.showChart);
           onVisibilityChanged({
             showBalanceCard: nextConfig.showBalanceCard,
-            showFlashRow: nextConfig.showFlashRow,
-            showProRow: nextConfig.showProRow,
+            visibleModels: nextConfig.visibleModels ?? [],
             showChart: nextConfig.showChart,
           });
         })
         .catch(() => {
           setShowBalanceCard(showBalanceCard);
-          setShowFlashRow(showFlashRow);
-          setShowProRow(showProRow);
+          setVisibleModels(visibleModels);
           setShowChart(showChart);
         });
     },
-    [showBalanceCard, showFlashRow, showProRow, showChart, onVisibilityChanged],
+    [showBalanceCard, visibleModels, showChart, onVisibilityChanged],
+  );
+
+  const toggleBalanceCard = React.useCallback(
+    (value: boolean) => persistVisibility({ showBalanceCard: value, visibleModels, showChart }),
+    [persistVisibility, visibleModels, showChart],
+  );
+  const toggleChart = React.useCallback(
+    (value: boolean) => persistVisibility({ showBalanceCard, visibleModels, showChart: value }),
+    [persistVisibility, showBalanceCard, visibleModels],
+  );
+
+  // 模型开关列表 = 官方 models 接口 ∪ 用量数据中出现的模型
+  const allModels = React.useMemo(() => {
+    const seen = new Set<string>();
+    availableModels.forEach((key) => seen.add(key));
+    usageModelKeys.forEach((key) => seen.add(key));
+    return Array.from(seen);
+  }, [availableModels, usageModelKeys]);
+  const visibleSet = React.useMemo(
+    () => (visibleModels.length > 0 ? new Set(visibleModels) : null),
+    [visibleModels],
+  );
+
+  const toggleModel = React.useCallback(
+    (key: string, on: boolean) => {
+      const base = new Set(visibleModels.length > 0 ? visibleModels : allModels);
+      if (on) {
+        base.add(key);
+      } else {
+        base.delete(key);
+      }
+      // 全部开启时回落为空列表(= 全部显示),保持配置最小化
+      const allOn = allModels.length > 0 && allModels.every((item) => base.has(item));
+      persistVisibility({
+        showBalanceCard,
+        visibleModels: allOn ? [] : Array.from(base),
+        showChart,
+      });
+    },
+    [allModels, persistVisibility, showBalanceCard, showChart, visibleModels],
   );
 
   return (
@@ -1232,26 +1265,20 @@ function SettingsPanel({
           </div>
           <div className="settings-block">
             <p className="muted">主面板内容显示</p>
-            <Toggle
-              label="显示账户余额卡"
-              checked={showBalanceCard}
-              onChange={(value) => saveVisibility("showBalanceCard", value)}
-            />
-            <Toggle
-              label="显示 V4 Flash 用量"
-              checked={showFlashRow}
-              onChange={(value) => saveVisibility("showFlashRow", value)}
-            />
-            <Toggle
-              label="显示 V4 Pro 用量"
-              checked={showProRow}
-              onChange={(value) => saveVisibility("showProRow", value)}
-            />
-            <Toggle
-              label="显示缓存命中图表"
-              checked={showChart}
-              onChange={(value) => saveVisibility("showChart", value)}
-            />
+            <Toggle label="显示账户余额卡" checked={showBalanceCard} onChange={toggleBalanceCard} />
+            {allModels.length > 0 ? (
+              allModels.map((key) => (
+                <Toggle
+                  key={key}
+                  label={`显示 ${key}`}
+                  checked={visibleSet ? visibleSet.has(key) : true}
+                  onChange={(value) => toggleModel(key, value)}
+                />
+              ))
+            ) : (
+              <p className="muted">未获取到模型列表(需配置 API Key 后自动加载)</p>
+            )}
+            <Toggle label="显示缓存命中图表" checked={showChart} onChange={toggleChart} />
           </div>
           <p className="muted">窗口大小:拖动窗口边缘自由调整,重启后保持。</p>
         </SettingsSection>
@@ -1312,23 +1339,23 @@ function ModelDetailPanel({
   usageState,
   onBack,
 }: {
-  model: ModelName;
+  model: string;
   usage: UsageResult | null;
   usageState: BalanceState;
   onBack: () => void;
 }) {
-  const isFlash = model === "flash";
   const data = usage?.models.find((item) => item.key === model) ?? null;
-  const title = isFlash ? "V4 Flash" : "V4 Pro";
-  const tintClass = isFlash ? "flash" : "pro";
+  const title = data?.name ?? model;
+  const accent = modelAccent(model);
   const cost = data ? fmtMoney(data.cost) : "—";
   const totalText = data ? fmtTokensShort(data.totalTokens) : "—";
 
   const days = recentUsageDays(usage?.days ?? []);
   const points = days.map((day) => {
-    const hit = isFlash ? day.flashCacheHit : day.proCacheHit;
-    const miss = isFlash ? day.flashCacheMiss : day.proCacheMiss;
-    const response = isFlash ? day.flashResponse : day.proResponse;
+    const item = day.models.find((entry) => entry.key === model);
+    const hit = item?.cacheHit ?? 0;
+    const miss = item?.cacheMiss ?? 0;
+    const response = item?.response ?? 0;
     return { date: day.date, hit, miss, response, total: hit + miss + response };
   });
   const maxVal = Math.max(...points.map((point) => point.total), 1);
@@ -1344,8 +1371,8 @@ function ModelDetailPanel({
         <X size={20} />
       </button>
       <article className="card detail-hero" data-tauri-drag-region>
-        <div className={`model-badge large ${tintClass}`}>
-          {isFlash ? <Zap size={34} fill="currentColor" /> : <Brain size={33} />}
+        <div className="model-badge large" style={{ color: accent, background: `${accent}22` }}>
+          <Zap size={34} fill="currentColor" />
         </div>
         <div>
           <h1>{title}</h1>
@@ -1356,11 +1383,11 @@ function ModelDetailPanel({
       <div className="detail-metrics">
         <article className="card metric-card">
           <span>API 请求次数</span>
-          <strong className={tintClass}>{data ? fmtInt(data.requestCount) : "—"}</strong>
+          <strong style={{ color: accent }}>{data ? fmtInt(data.requestCount) : "—"}</strong>
         </article>
         <article className="card metric-card">
           <span>Tokens</span>
-          <strong className={tintClass}>{totalText}</strong>
+          <strong style={{ color: accent }}>{totalText}</strong>
         </article>
       </div>
 
