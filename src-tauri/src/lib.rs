@@ -426,7 +426,8 @@ pub fn run() {
         let config = read_stored_config().unwrap_or_default();
         if let Some(window) = app.get_webview_window("main") {
             if config.mini_mode {
-                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(360, 110)));
+                // 前端测量文字后会自动收紧;这里给个紧凑的初始尺寸
+                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(300, 70)));
             } else {
                 let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
                     config.window_width,

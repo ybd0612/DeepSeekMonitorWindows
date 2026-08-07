@@ -97,7 +97,7 @@ button {
 .mini-line {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 3px 10px;
   font-size: 11px;
 }

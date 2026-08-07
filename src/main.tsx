@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import {
   BarChart3,
   CalendarDays,
@@ -1623,8 +1624,36 @@ function MiniPanel({
   const errorText =
     usageState === "error" ? usageError : balanceState === "error" ? balanceError : "";
 
+  const panelRef = React.useRef<HTMLElement | null>(null);
+
+  // 自适应宽度:按最宽一行文字的自然宽度收紧窗口,只包住文字。
+  // 行设 nowrap,scrollWidth 即自然宽度,不受容器宽度影响,不会触发循环缩放。
+  React.useEffect(() => {
+    if (usageState !== "ok" && balanceState !== "ok") {
+      return;
+    }
+    const el = panelRef.current;
+    if (!el) {
+      return;
+    }
+    let maxW = 0;
+    el.querySelectorAll<HTMLElement>(".mini-line").forEach((line) => {
+      maxW = Math.max(maxW, line.scrollWidth);
+    });
+    if (maxW <= 0) {
+      return;
+    }
+    const targetW = Math.max(260, Math.min(maxW + 28, 520));
+    try {
+      void getCurrentWindow().setSize(new LogicalSize(targetW, 70)).catch(() => {});
+    } catch {
+      // 浏览器预览无 Tauri
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [balanceText, todayCost, monthCost, modelName, input, hit, output, usageState, balanceState]);
+
   return (
-    <section className="panel mini-panel">
+    <section ref={panelRef} className="panel mini-panel">
       <header className="mini-drag" data-tauri-drag-region />
       {errorText && <div className="mini-error">{errorText}</div>}
       {/* 消费行 */}
