@@ -238,10 +238,12 @@ function App() {
 
   React.useEffect(() => {
     if (isSettingsWindow) {
-      return; // 设置窗口无需拉取余额/用量数据
+      // 设置窗口只拉用量,用于动态模型列表(不拉余额)
+      loadUsage();
+      return;
     }
     refreshAll();
-  }, [refreshAll, isSettingsWindow]);
+  }, [refreshAll, loadUsage, isSettingsWindow]);
 
   React.useEffect(() => {
     void invoke<AppConfig>("get_app_config")
@@ -390,7 +392,9 @@ function App() {
           onRefreshIntervalChanged={setRefreshIntervalSeconds}
           onAutoRefreshChanged={setAutoRefreshEnabled}
           availableModels={availableModels}
-          usageModelKeys={(usage?.models ?? []).map((item) => item.key)}
+          usageModelKeys={(usage?.models ?? [])
+            .filter((item) => item.requestCount > 0 || item.totalTokens > 0)
+            .map((item) => item.key)}
           onVisibilityChanged={({ showBalanceCard: b, visibleModels: v, showChart: c }) => {
             setShowBalanceCard(b);
             setVisibleModels(v);
@@ -448,9 +452,12 @@ function DashboardPanel({
   visibleModels: string[];
   showChart: boolean;
 }) {
-  // 模型行由用量数据驱动:空 visibleModels = 全部显示
+  // 模型行由用量数据驱动:只显示本月有实际使用记录的模型(排除 legacy 空壳),
+  // 空 visibleModels = 全部显示
   const visibleKeys = visibleModels.length > 0 ? new Set(visibleModels) : null;
-  const modelRows = (usage?.models ?? []).filter((item) => (visibleKeys ? visibleKeys.has(item.key) : true));
+  const modelRows = (usage?.models ?? [])
+    .filter((item) => item.requestCount > 0 || item.totalTokens > 0)
+    .filter((item) => (visibleKeys ? visibleKeys.has(item.key) : true));
   const maxTokens = Math.max(...modelRows.map((item) => item.totalTokens), 1);
   const today = usage?.days.find((day) => day.date === todayStr()) ?? null;
   const todayCost = usageState === "ok" && today ? today.totalCost : null;
@@ -458,12 +465,8 @@ function DashboardPanel({
 
   return (
     <section className="panel dashboard-panel" data-testid="dashboard-panel">
-      <header className="panel-header" data-tauri-drag-region>
-        <div className="title-lockup" data-tauri-drag-region>
-          <BrandIcon size={36} />
-          <h1>DeepSeek Monitor</h1>
-        </div>
-      </header>
+      {/* 顶部仅保留拖拽区,标题与图标已移除 */}
+      <header className="panel-header" data-tauri-drag-region />
 
       {showBalanceCard && (
         <BalanceCard
@@ -1076,12 +1079,13 @@ function SettingsPanel({
     [persistVisibility, showBalanceCard, visibleModels],
   );
 
-  // 模型开关列表 = 官方 models 接口 ∪ 用量数据中出现的模型
+  // 模型开关列表:优先用户实际用过的模型(usageModelKeys,已过滤零使用);
+  // 无用量数据时回退到官方 models 接口的完整列表
   const allModels = React.useMemo(() => {
-    const seen = new Set<string>();
-    availableModels.forEach((key) => seen.add(key));
-    usageModelKeys.forEach((key) => seen.add(key));
-    return Array.from(seen);
+    if (usageModelKeys.length > 0) {
+      return usageModelKeys;
+    }
+    return availableModels;
   }, [availableModels, usageModelKeys]);
   const visibleSet = React.useMemo(
     () => (visibleModels.length > 0 ? new Set(visibleModels) : null),

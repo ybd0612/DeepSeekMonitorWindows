@@ -194,6 +194,12 @@ pub fn run() {
     fn show_main_window(window: &WebviewWindow) {
         let _ = position_near_tray(window);
         let _ = window.show();
+        // Windows 在窗口隐藏/重新显示后可能丢失 WS_EX_TOPMOST,
+        // 每次显示都按配置重新断言置顶,避免“开了置顶却有时不置顶”。
+        let on_top = read_stored_config()
+            .map(|config| config.always_on_top)
+            .unwrap_or(false);
+        let _ = window.set_always_on_top(on_top);
         let _ = window.set_focus();
     }
 

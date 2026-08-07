@@ -87,6 +87,8 @@ button {
   justify-content: space-between;
   padding-top: 18px;
   margin-bottom: 2px;
+  /* 标题移除后仍是完整可拖拽区 */
+  min-height: 40px;
 }
 
 .title-lockup {
