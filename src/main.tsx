@@ -157,6 +157,16 @@ const refreshOptions = [
   { label: "1 小时", value: 3600 },
 ];
 
+// 预设皮肤:value 即 documentElement 的 data-theme 值;colors 仅用于色块预览
+const skinPresets = [
+  { value: "dark", label: "暗金", colors: ["#4d6bfe", "#da38f0"] },
+  { value: "light", label: "亮蓝", colors: ["#2d6cf6", "#7fd1f0"] },
+  { value: "emerald", label: "翡翠", colors: ["#10b981", "#a3e635"] },
+  { value: "violet", label: "罗兰", colors: ["#8b5cf6", "#f472b6"] },
+  { value: "sunset", label: "晚霞", colors: ["#f97316", "#ef4444"] },
+  { value: "graphite", label: "石墨", colors: ["#64748b", "#94a3b8"] },
+];
+
 // 整窗透明度:窗口已 transparent,对 documentElement 施加 CSS opacity 后,
 // 内容整体 alpha 降低,桌面自然透出(含文字)。clamp 到 30–100,防止完全不可见。
 const applyWindowOpacity = (percent: number) => {
@@ -770,14 +780,13 @@ function SettingsPanel({
   // 配置加载完成前禁止持久化透明度,避免用默认值覆盖用户已保存的显示设置
   const displayLoadedRef = React.useRef(false);
 
-  // 换肤:亮/暗皮肤,与旧版一致存 localStorage、写入 documentElement data-theme。
-  // 同时广播 theme-changed 让主窗口实时跟随(设置窗口与主窗口各自独立 DOM)。
-  const setThemeSkin = React.useCallback((enabled: boolean) => {
-    const next = enabled ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("ui-theme", next);
-    document.documentElement.setAttribute("data-theme", next);
-    void emit("theme-changed", next).catch(() => {});
+  // 换肤:预设皮肤写 localStorage 与 documentElement data-theme,
+  // 并广播 theme-changed 让主窗口实时跟随(设置窗口与主窗口各自独立 DOM)。
+  const selectSkin = React.useCallback((value: string) => {
+    setTheme(value);
+    localStorage.setItem("ui-theme", value);
+    document.documentElement.setAttribute("data-theme", value);
+    void emit("theme-changed", value).catch(() => {});
   }, []);
   const configPath = config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 
@@ -1182,8 +1191,23 @@ function SettingsPanel({
         <SettingsSection icon={<SlidersHorizontal size={15} />} title="显示设置">
           <p>调节窗口显示方式与主面板内容。</p>
           <div className="settings-block">
-            <p className="muted">外观</p>
-            <Toggle label="亮色皮肤" checked={theme === "light"} onChange={setThemeSkin} />
+            <p className="muted">外观(选择皮肤)</p>
+            <div className="skin-grid">
+              {skinPresets.map((skin) => (
+                <button
+                  key={skin.value}
+                  className={`skin-option${theme === skin.value ? " selected" : ""}`}
+                  onClick={() => selectSkin(skin.value)}
+                  title={skin.label}
+                >
+                  <i
+                    className="skin-swatch"
+                    style={{ background: `linear-gradient(135deg, ${skin.colors[0]}, ${skin.colors[1]})` }}
+                  />
+                  <span>{skin.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
           <div className="settings-block">
             <p className="muted">窗口透明度(含文字,可透视桌面)</p>
