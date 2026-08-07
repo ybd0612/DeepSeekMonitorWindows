@@ -20,6 +20,10 @@ pub fn run() {
         webview::PageLoadEvent,
         Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
     };
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
 
     #[derive(Debug, Deserialize, Serialize)]
     #[serde(default)]
@@ -196,6 +200,35 @@ pub fn run() {
         )))
     }
 
+    // 强制置顶:直接调 Win32 SetWindowPos(HWND_TOPMOST/NOTOPMOST)。
+    // tao 的 set_always_on_top 依赖内部标志位 diff,重复设同值不会触发 SetWindowPos,
+    // 导致启动时置顶不落位(表现为必须先关再开才生效)。
+    fn force_always_on_top(window: &WebviewWindow, on_top: bool) {
+        let Ok(hwnd) = window.hwnd() else { return };
+        let insert_after = if on_top {
+            HWND(-1isize as *mut core::ffi::c_void) // HWND_TOPMOST
+        } else {
+            HWND(-2isize as *mut core::ffi::c_void) // HWND_NOTOPMOST
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(insert_after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    // 同步 tao 内部标志 + 强制 OS 落位,双保险
+    fn apply_always_on_top(window: &WebviewWindow, on_top: bool) {
+        let _ = window.set_always_on_top(on_top);
+        force_always_on_top(window, on_top);
+    }
+
     fn show_main_window(window: &WebviewWindow) {
         let config = read_stored_config().unwrap_or_default();
         // 恢复上次位置;无记录时首次贴托盘
@@ -205,8 +238,8 @@ pub fn run() {
             let _ = position_near_tray(window);
         }
         let _ = window.show();
-        // Windows 在窗口隐藏/重新显示后可能丢失 WS_EX_TOPMOST,每次显示重新断言置顶
-        let _ = window.set_always_on_top(config.always_on_top);
+        // Windows 在窗口隐藏/重新显示后可能丢失 WS_EX_TOPMOST,每次显示强制重新断言置顶
+        apply_always_on_top(window, config.always_on_top);
         let _ = window.set_focus();
     }
 
@@ -337,7 +370,7 @@ pub fn run() {
         config.always_on_top = always_on_top;
         write_stored_config(&config)?;
         if let Some(main) = app.get_webview_window("main") {
-            let _ = main.set_always_on_top(always_on_top);
+            apply_always_on_top(&main, always_on_top);
         }
         let app_config = to_app_config(config)?;
         let _ = app.emit("display-config-changed", &app_config);
@@ -1171,7 +1204,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 match read_stored_config() {
                     Ok(config) => {
-                        let _ = window.set_always_on_top(config.always_on_top);
+                        apply_always_on_top(&window, config.always_on_top);
                         let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
                             config.window_width,
                             config.window_height,

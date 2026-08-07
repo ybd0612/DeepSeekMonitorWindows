@@ -25,3 +25,5 @@ tauri = { version = "2.11.2", features = ["tray-icon"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 reqwest = { version = "0.12", features = ["json"] }
+# 直接调 Win32 SetWindowPos 强制置顶,绕过 tao 的 ALWAYS_ON_TOP 缓存(重复设同值不落位)
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
