@@ -21,15 +21,43 @@ pub fn run() {
         Emitter, Manager, PhysicalPosition, Position, WebviewWindow,
     };
 
-    #[derive(Debug, Default, Deserialize, Serialize)]
+    #[derive(Debug, Deserialize, Serialize)]
+    #[serde(default)]
     struct StoredConfig {
         api_key: Option<String>,
-        #[serde(default)]
         usage_token: Option<String>,
         refresh_interval_seconds: u64,
-        #[serde(default)]
         auto_refresh_enabled: bool,
         autostart: bool,
+        // 显示设置:老 config.json 缺失这些字段时走 Default,保证向后兼容
+        window_opacity: f64,
+        always_on_top: bool,
+        show_balance_card: bool,
+        show_flash_row: bool,
+        show_pro_row: bool,
+        show_chart: bool,
+        window_width: u32,
+        window_height: u32,
+    }
+
+    impl Default for StoredConfig {
+        fn default() -> Self {
+            StoredConfig {
+                api_key: None,
+                usage_token: None,
+                refresh_interval_seconds: 60,
+                auto_refresh_enabled: false,
+                autostart: false,
+                window_opacity: 1.0,
+                always_on_top: false,
+                show_balance_card: true,
+                show_flash_row: true,
+                show_pro_row: true,
+                show_chart: true,
+                window_width: 356,
+                window_height: 600,
+            }
+        }
     }
 
     #[derive(Debug, Serialize)]
@@ -41,6 +69,14 @@ pub fn run() {
         refresh_interval_seconds: u64,
         auto_refresh_enabled: bool,
         autostart: bool,
+        window_opacity: f64,
+        always_on_top: bool,
+        show_balance_card: bool,
+        show_flash_row: bool,
+        show_pro_row: bool,
+        show_chart: bool,
+        window_width: u32,
+        window_height: u32,
         config_path: String,
     }
 
@@ -54,10 +90,7 @@ pub fn run() {
     fn read_stored_config() -> Result<StoredConfig, String> {
         let path = config_path()?;
         if !path.exists() {
-            return Ok(StoredConfig {
-                refresh_interval_seconds: 60,
-                ..StoredConfig::default()
-            });
+            return Ok(StoredConfig::default());
         }
 
         let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
@@ -124,6 +157,14 @@ pub fn run() {
             refresh_interval_seconds: config.refresh_interval_seconds,
             auto_refresh_enabled: config.auto_refresh_enabled,
             autostart: config.autostart,
+            window_opacity: config.window_opacity,
+            always_on_top: config.always_on_top,
+            show_balance_card: config.show_balance_card,
+            show_flash_row: config.show_flash_row,
+            show_pro_row: config.show_pro_row,
+            show_chart: config.show_chart,
+            window_width: config.window_width,
+            window_height: config.window_height,
             config_path: path.to_string_lossy().to_string(),
         })
     }
@@ -241,6 +282,53 @@ pub fn run() {
         apply_autostart(autostart)?;
         let mut config = read_stored_config()?;
         config.autostart = autostart;
+        write_stored_config(&config)?;
+        to_app_config(config)
+    }
+
+    // 保存整窗透明度与置顶。透明度 clamp 到 0.3–1.0,避免滑到 0 时窗口完全不可见。
+    // Tauri 2.11 无 set_opacity API,透明度由前端在 documentElement 上以 CSS opacity
+    // 应用(窗口已 transparent,内容 alpha 降低后桌面自然透出);这里只负责持久化与置顶。
+    #[tauri::command]
+    fn save_display_settings(
+        window: WebviewWindow,
+        opacity: f64,
+        always_on_top: bool,
+    ) -> Result<AppConfig, String> {
+        let opacity = opacity.clamp(0.3, 1.0);
+        let mut config = read_stored_config()?;
+        config.window_opacity = opacity;
+        config.always_on_top = always_on_top;
+        write_stored_config(&config)?;
+        window
+            .set_always_on_top(always_on_top)
+            .map_err(|error| error.to_string())?;
+        to_app_config(config)
+    }
+
+    // 主面板区块显示开关:余额卡 / Flash 行 / Pro 行 / 缓存图表,纯持久化。
+    #[tauri::command]
+    fn save_visibility(
+        show_balance_card: bool,
+        show_flash_row: bool,
+        show_pro_row: bool,
+        show_chart: bool,
+    ) -> Result<AppConfig, String> {
+        let mut config = read_stored_config()?;
+        config.show_balance_card = show_balance_card;
+        config.show_flash_row = show_flash_row;
+        config.show_pro_row = show_pro_row;
+        config.show_chart = show_chart;
+        write_stored_config(&config)?;
+        to_app_config(config)
+    }
+
+    // 记忆窗口尺寸,重启后由 setup 恢复。
+    #[tauri::command]
+    fn save_window_size(width: u32, height: u32) -> Result<AppConfig, String> {
+        let mut config = read_stored_config()?;
+        config.window_width = width;
+        config.window_height = height;
         write_stored_config(&config)?;
         to_app_config(config)
     }
@@ -917,6 +1005,9 @@ pub fn run() {
             save_refresh_interval,
             save_auto_refresh_enabled,
             save_autostart,
+            save_display_settings,
+            save_visibility,
+            save_window_size,
             fetch_balance,
             save_usage_token,
             clear_usage_token,
@@ -934,8 +1025,11 @@ pub fn run() {
             }
 
             let show_item = MenuItem::with_id(app, "show", "显示主面板", true, None::<&str>)?;
+            let refresh_item = MenuItem::with_id(app, "refresh", "刷新数据", true, None::<&str>)?;
+            let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let tray_menu =
+                Menu::with_items(app, &[&show_item, &refresh_item, &settings_item, &quit_item])?;
 
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&tray_menu)
@@ -943,6 +1037,19 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
+                            show_main_window(&window);
+                        }
+                    }
+                    // 前端顶部按钮已移除,刷新/设置入口全部收敛到托盘右键菜单
+                    "refresh" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = app.emit("refresh-data", ());
+                            show_main_window(&window);
+                        }
+                    }
+                    "settings" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = app.emit("open-settings", ());
                             show_main_window(&window);
                         }
                     }
@@ -976,6 +1083,22 @@ pub fn run() {
             }
 
             tray_builder.build(app)?;
+
+            // 应用已保存的显示设置(置顶/窗口尺寸),避免启动时先闪默认值。
+            // 透明度由前端在 documentElement 上以 CSS opacity 应用。
+            if let Some(window) = app.get_webview_window("main") {
+                match read_stored_config() {
+                    Ok(config) => {
+                        let _ = window.set_always_on_top(config.always_on_top);
+                        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+                            config.window_width,
+                            config.window_height,
+                        )));
+                    }
+                    Err(error) => log::warn!("读取显示设置失败: {error}"),
+                }
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())

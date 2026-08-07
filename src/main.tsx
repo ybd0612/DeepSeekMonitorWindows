@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   BarChart3,
   Brain,
@@ -14,8 +15,7 @@ import {
   KeyRound,
   Power,
   RefreshCw,
-  Settings,
-  Shirt,
+  SlidersHorizontal,
   SunMedium,
   X,
   Zap,
@@ -31,6 +31,14 @@ type AppConfig = {
   refreshIntervalSeconds: number;
   autoRefreshEnabled: boolean;
   autostart: boolean;
+  windowOpacity: number;
+  alwaysOnTop: boolean;
+  showBalanceCard: boolean;
+  showFlashRow: boolean;
+  showProRow: boolean;
+  showChart: boolean;
+  windowWidth: number;
+  windowHeight: number;
   configPath: string;
 };
 type BalanceData = {
@@ -149,6 +157,13 @@ const refreshOptions = [
   { label: "1 小时", value: 3600 },
 ];
 
+// 整窗透明度:窗口已 transparent,对 documentElement 施加 CSS opacity 后,
+// 内容整体 alpha 降低,桌面自然透出(含文字)。clamp 到 30–100,防止完全不可见。
+const applyWindowOpacity = (percent: number) => {
+  const clamped = Math.min(100, Math.max(30, percent));
+  document.documentElement.style.opacity = String(clamped / 100);
+};
+
 function App() {
   const [view, setView] = React.useState<ViewName>("dashboard");
   const [model, setModel] = React.useState<ModelName>("flash");
@@ -162,6 +177,10 @@ function App() {
   const [usageError, setUsageError] = React.useState("");
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] = React.useState(60);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = React.useState(false);
+  const [showBalanceCard, setShowBalanceCard] = React.useState(true);
+  const [showFlashRow, setShowFlashRow] = React.useState(true);
+  const [showProRow, setShowProRow] = React.useState(true);
+  const [showChart, setShowChart] = React.useState(true);
 
   const loadBalance = React.useCallback(() => {
     setBalanceState("loading");
@@ -207,11 +226,49 @@ function App() {
       .then((config) => {
         setRefreshIntervalSeconds(config.refreshIntervalSeconds || 60);
         setAutoRefreshEnabled(config.autoRefreshEnabled);
+        setShowBalanceCard(config.showBalanceCard);
+        setShowFlashRow(config.showFlashRow);
+        setShowProRow(config.showProRow);
+        setShowChart(config.showChart);
+        applyWindowOpacity(Math.round((config.windowOpacity ?? 1) * 100));
       })
       .catch(() => {
         setRefreshIntervalSeconds(60);
         setAutoRefreshEnabled(false);
+        applyWindowOpacity(100);
       });
+  }, []);
+
+  // 记住用户拖拽后的窗口尺寸,写入配置供 Rust setup 恢复。
+  // 浏览器预览模式下没有 Tauri 窗口,静默跳过。
+  React.useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let saveTimer: number | undefined;
+    try {
+      getCurrentWindow()
+        .onResized(({ payload }) => {
+          window.clearTimeout(saveTimer);
+          saveTimer = window.setTimeout(() => {
+            void invoke("save_window_size", { width: payload.width, height: payload.height }).catch(
+              () => {
+                // no-op: 非 Tauri 环境
+              },
+            );
+          }, 400);
+        })
+        .then((unlistenFn) => {
+          unlisten = unlistenFn;
+        })
+        .catch(() => {
+          // no-op: 非 Tauri 环境
+        });
+    } catch {
+      // 浏览器预览无 Tauri 窗口,静默跳过
+    }
+    return () => {
+      window.clearTimeout(saveTimer);
+      unlisten?.();
+    };
   }, []);
 
   React.useEffect(() => {
@@ -222,11 +279,25 @@ function App() {
     return () => window.clearInterval(timer);
   }, [autoRefreshEnabled, refreshAll, refreshIntervalSeconds]);
 
-  const hideWindow = React.useCallback(() => {
-    void invoke("hide_main_window").catch(() => {
-      // Browser preview has no Tauri IPC. Keep it non-blocking for visual checks.
-    });
-  }, []);
+  // 托盘右键菜单(刷新数据/设置)驱动前端导航与刷新。浏览器预览无 Tauri,静默跳过。
+  React.useEffect(() => {
+    let unlistenSettings: (() => void) | undefined;
+    let unlistenRefresh: (() => void) | undefined;
+    void listen("open-settings", () => setView("settings"))
+      .then((fn) => {
+        unlistenSettings = fn;
+      })
+      .catch(() => {});
+    void listen("refresh-data", () => refreshAll())
+      .then((fn) => {
+        unlistenRefresh = fn;
+      })
+      .catch(() => {});
+    return () => {
+      unlistenSettings?.();
+      unlistenRefresh?.();
+    };
+  }, [refreshAll]);
 
   return (
     <div className="stage">
@@ -238,13 +309,14 @@ function App() {
           usage={usage}
           usageState={usageState}
           usageError={usageError}
-          onRefresh={refreshAll}
-          onClose={hideWindow}
-          onSettings={() => setView("settings")}
           onDetail={(nextModel) => {
             setModel(nextModel);
             setView("detail");
           }}
+          showBalanceCard={showBalanceCard}
+          showFlashRow={showFlashRow}
+          showProRow={showProRow}
+          showChart={showChart}
         />
       )}
       {view === "settings" && (
@@ -261,6 +333,12 @@ function App() {
           }}
           onRefreshIntervalChanged={setRefreshIntervalSeconds}
           onAutoRefreshChanged={setAutoRefreshEnabled}
+          onVisibilityChanged={({ showBalanceCard: b, showFlashRow: f, showProRow: p, showChart: c }) => {
+            setShowBalanceCard(b);
+            setShowFlashRow(f);
+            setShowProRow(p);
+            setShowChart(c);
+          }}
           onBack={() => setView("dashboard")}
         />
       )}
@@ -286,10 +364,11 @@ function DashboardPanel({
   usage,
   usageState,
   usageError,
-  onRefresh,
-  onClose,
-  onSettings,
   onDetail,
+  showBalanceCard,
+  showFlashRow,
+  showProRow,
+  showChart,
 }: {
   balance: BalanceData | null;
   balanceState: BalanceState;
@@ -297,20 +376,12 @@ function DashboardPanel({
   usage: UsageResult | null;
   usageState: BalanceState;
   usageError: string;
-  onRefresh: () => void;
-  onClose: () => void;
-  onSettings: () => void;
   onDetail: (model: ModelName) => void;
+  showBalanceCard: boolean;
+  showFlashRow: boolean;
+  showProRow: boolean;
+  showChart: boolean;
 }) {
-  const [theme, setTheme] = React.useState<string>(
-    () => localStorage.getItem("ui-theme") || "dark",
-  );
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    localStorage.setItem("ui-theme", next);
-    document.documentElement.setAttribute("data-theme", next);
-  };
   const flash = usage?.models.find((item) => item.key === "flash") ?? null;
   const pro = usage?.models.find((item) => item.key === "pro") ?? null;
   const maxTokens = Math.max(flash?.totalTokens ?? 0, pro?.totalTokens ?? 0, 1);
@@ -325,55 +396,46 @@ function DashboardPanel({
           <BrandIcon size={36} />
           <h1>DeepSeek Monitor</h1>
         </div>
-        <div className="header-actions">
-          <button aria-label="刷新" onClick={onRefresh}>
-            <RefreshCw size={22} />
-          </button>
-          <div className="skin-menu-wrap">
-            <button
-              aria-label="Toggle theme"
-              className="skin-toggle"
-              title={theme === "dark" ? "Switch to light" : "Switch to dark"}
-              onClick={toggleTheme}
-            >
-              <Shirt size={21} />
-            </button>
-          </div>
-          <button aria-label="设置" onClick={onSettings}>
-            <Settings size={23} />
-          </button>
-          <button aria-label="关闭" onClick={onClose}>
-            <X size={25} />
-          </button>
-        </div>
       </header>
 
-      <BalanceCard
-        balance={balance}
-        state={balanceState}
-        error={balanceError}
-        todayCost={todayCost}
-        monthCost={monthCost}
-      />
-
-      <div className="usage-stack">
-        <UsageRow
-          modelKey="flash"
-          data={flash}
-          maxTokens={maxTokens}
-          state={usageState}
-          onClick={() => onDetail("flash")}
+      {showBalanceCard && (
+        <BalanceCard
+          balance={balance}
+          state={balanceState}
+          error={balanceError}
+          todayCost={todayCost}
+          monthCost={monthCost}
         />
-        <UsageRow
-          modelKey="pro"
-          data={pro}
-          maxTokens={maxTokens}
-          state={usageState}
-          onClick={() => onDetail("pro")}
-        />
-      </div>
+      )}
 
-      <UsageChart usage={usage} state={usageState} error={usageError} />
+      {(showFlashRow || showProRow) && (
+        <div className="usage-stack">
+          {showFlashRow && (
+            <UsageRow
+              modelKey="flash"
+              data={flash}
+              maxTokens={maxTokens}
+              state={usageState}
+              onClick={() => onDetail("flash")}
+            />
+          )}
+          {showProRow && (
+            <UsageRow
+              modelKey="pro"
+              data={pro}
+              maxTokens={maxTokens}
+              state={usageState}
+              onClick={() => onDetail("pro")}
+            />
+          )}
+        </div>
+      )}
+
+      {showChart && <UsageChart usage={usage} state={usageState} error={usageError} />}
+
+      {!showBalanceCard && !showFlashRow && !showProRow && !showChart && (
+        <div className="chart-placeholder">已隐藏全部区块,可在设置中恢复显示</div>
+      )}
     </section>
   );
 }
@@ -620,12 +682,19 @@ function SettingsPanel({
   onUsageCleared,
   onRefreshIntervalChanged,
   onAutoRefreshChanged,
+  onVisibilityChanged,
 }: {
   onBack: () => void;
   onUsageLoaded: (usage: UsageResult) => void;
   onUsageCleared: () => void;
   onRefreshIntervalChanged: (seconds: number) => void;
   onAutoRefreshChanged: (enabled: boolean) => void;
+  onVisibilityChanged: (visibility: {
+    showBalanceCard: boolean;
+    showFlashRow: boolean;
+    showProRow: boolean;
+    showChart: boolean;
+  }) => void;
 }) {
   const [apiKey, setApiKey] = React.useState("");
   const [config, setConfig] = React.useState<AppConfig | null>(null);
@@ -639,6 +708,25 @@ function SettingsPanel({
   const [usageSyncing, setUsageSyncing] = React.useState(false);
   const [showManualPaste, setShowManualPaste] = React.useState(false);
   const [appVersion, setAppVersion] = React.useState("1.1.0");
+  const [opacity, setOpacity] = React.useState(100);
+  const [alwaysOnTop, setAlwaysOnTop] = React.useState(false);
+  const [showBalanceCard, setShowBalanceCard] = React.useState(true);
+  const [showFlashRow, setShowFlashRow] = React.useState(true);
+  const [showProRow, setShowProRow] = React.useState(true);
+  const [showChart, setShowChart] = React.useState(true);
+  const [theme, setTheme] = React.useState<string>(
+    () => localStorage.getItem("ui-theme") || "dark",
+  );
+  // 配置加载完成前禁止持久化透明度,避免用默认值覆盖用户已保存的显示设置
+  const displayLoadedRef = React.useRef(false);
+
+  // 换肤:亮/暗皮肤,与旧版一致存 localStorage、写入 documentElement data-theme
+  const setThemeSkin = React.useCallback((enabled: boolean) => {
+    const next = enabled ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("ui-theme", next);
+    document.documentElement.setAttribute("data-theme", next);
+  }, []);
   const configPath = config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 
   React.useEffect(() => {
@@ -648,8 +736,15 @@ function SettingsPanel({
         setRefresh(nextConfig.refreshIntervalSeconds || 60);
         setAutoRefresh(nextConfig.autoRefreshEnabled);
         setAutostart(nextConfig.autostart);
+        setOpacity(Math.round((nextConfig.windowOpacity ?? 1) * 100));
+        setAlwaysOnTop(nextConfig.alwaysOnTop);
+        setShowBalanceCard(nextConfig.showBalanceCard);
+        setShowFlashRow(nextConfig.showFlashRow);
+        setShowProRow(nextConfig.showProRow);
+        setShowChart(nextConfig.showChart);
         setStatus(nextConfig.apiKeyConfigured ? `已配置 ${nextConfig.apiKeyPreview}` : "未配置 API Key");
         setUsageStatus(nextConfig.usageTokenConfigured ? "用量 Token 已配置" : "未配置用量 Token");
+        displayLoadedRef.current = true;
       })
       .catch(() => {
         setStatus("浏览器预览模式，未连接本地配置");
@@ -853,6 +948,71 @@ function SettingsPanel({
       .catch(() => setAutostart(previous));
   }, [autostart]);
 
+  const opacitySaveTimer = React.useRef<number | undefined>(undefined);
+
+  // 透明度滑杆:拖动时本地即时反馈,400ms 防抖后统一持久化并实时应用到窗口。
+  // 配置加载完成前不持久化,避免用默认值覆盖用户已保存的设置。
+  const persistDisplay = React.useCallback((nextOpacity: number, nextOnTop: boolean) => {
+    if (!displayLoadedRef.current) {
+      return;
+    }
+    window.clearTimeout(opacitySaveTimer.current);
+    opacitySaveTimer.current = window.setTimeout(() => {
+      void invoke<AppConfig>("save_display_settings", {
+        opacity: nextOpacity / 100,
+        alwaysOnTop: nextOnTop,
+      })
+        .then((nextConfig) => {
+          setConfig(nextConfig);
+          setOpacity(Math.round((nextConfig.windowOpacity ?? 1) * 100));
+          setAlwaysOnTop(nextConfig.alwaysOnTop);
+        })
+        .catch(() => {
+          // 保存失败保持当前 UI,不强制回滚,避免滑杆跳动
+        });
+    }, 400);
+  }, []);
+
+  const saveOnTop = React.useCallback(
+    (enabled: boolean) => {
+      setAlwaysOnTop(enabled);
+      persistDisplay(opacity, enabled);
+    },
+    [opacity, persistDisplay],
+  );
+
+  const saveVisibility = React.useCallback(
+    (key: "showBalanceCard" | "showFlashRow" | "showProRow" | "showChart", value: boolean) => {
+      const next = {
+        showBalanceCard: key === "showBalanceCard" ? value : showBalanceCard,
+        showFlashRow: key === "showFlashRow" ? value : showFlashRow,
+        showProRow: key === "showProRow" ? value : showProRow,
+        showChart: key === "showChart" ? value : showChart,
+      };
+      void invoke<AppConfig>("save_visibility", next)
+        .then((nextConfig) => {
+          setConfig(nextConfig);
+          setShowBalanceCard(nextConfig.showBalanceCard);
+          setShowFlashRow(nextConfig.showFlashRow);
+          setShowProRow(nextConfig.showProRow);
+          setShowChart(nextConfig.showChart);
+          onVisibilityChanged({
+            showBalanceCard: nextConfig.showBalanceCard,
+            showFlashRow: nextConfig.showFlashRow,
+            showProRow: nextConfig.showProRow,
+            showChart: nextConfig.showChart,
+          });
+        })
+        .catch(() => {
+          setShowBalanceCard(showBalanceCard);
+          setShowFlashRow(showFlashRow);
+          setShowProRow(showProRow);
+          setShowChart(showChart);
+        });
+    },
+    [showBalanceCard, showFlashRow, showProRow, showChart, onVisibilityChanged],
+  );
+
   return (
     <section className="settings-panel" data-testid="settings-panel">
       <button className="floating-close settings-close" onClick={onBack} aria-label="返回主面板">
@@ -965,6 +1125,59 @@ function SettingsPanel({
               ))}
             </div>
           )}
+        </SettingsSection>
+
+        <SettingsSection icon={<SlidersHorizontal size={15} />} title="显示设置">
+          <p>调节窗口显示方式与主面板内容。</p>
+          <div className="settings-block">
+            <p className="muted">外观</p>
+            <Toggle label="亮色皮肤" checked={theme === "light"} onChange={setThemeSkin} />
+          </div>
+          <div className="settings-block">
+            <p className="muted">窗口透明度(含文字,可透视桌面)</p>
+            <div className="opacity-row">
+              <input
+                aria-label="窗口透明度"
+                type="range"
+                min={30}
+                max={100}
+                step={5}
+                value={opacity}
+                onChange={(event) => {
+                  const nextOpacity = Number(event.target.value);
+                  setOpacity(nextOpacity);
+                  applyWindowOpacity(nextOpacity);
+                  persistDisplay(nextOpacity, alwaysOnTop);
+                }}
+              />
+              <strong>{opacity}%</strong>
+            </div>
+            <Toggle label="窗口始终置顶" checked={alwaysOnTop} onChange={saveOnTop} />
+          </div>
+          <div className="settings-block">
+            <p className="muted">主面板内容显示</p>
+            <Toggle
+              label="显示账户余额卡"
+              checked={showBalanceCard}
+              onChange={(value) => saveVisibility("showBalanceCard", value)}
+            />
+            <Toggle
+              label="显示 V4 Flash 用量"
+              checked={showFlashRow}
+              onChange={(value) => saveVisibility("showFlashRow", value)}
+            />
+            <Toggle
+              label="显示 V4 Pro 用量"
+              checked={showProRow}
+              onChange={(value) => saveVisibility("showProRow", value)}
+            />
+            <Toggle
+              label="显示缓存命中图表"
+              checked={showChart}
+              onChange={(value) => saveVisibility("showChart", value)}
+            />
+          </div>
+          <p className="muted">窗口大小:拖动窗口边缘自由调整,重启后保持。</p>
         </SettingsSection>
 
         <SettingsSection icon={<Info size={15} />} title="关于">

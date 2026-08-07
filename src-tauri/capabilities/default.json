@@ -19,6 +19,7 @@
     "core:window:allow-show",
     "core:window:allow-close",
     "core:window:allow-set-focus",
+    "core:window:allow-set-always-on-top",
     "core:event:allow-emit",
     "core:event:allow-listen",
     "core:webview:allow-internal-toggle-devtools"
