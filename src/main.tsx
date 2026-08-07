@@ -202,7 +202,7 @@ function App() {
   const [availableModels, setAvailableModels] = React.useState<string[]>([]);
 
   const loadBalance = React.useCallback(() => {
-    setBalanceState("loading");
+    // 刷新时不降级为 loading,保留旧数据避免闪烁(初始 render 已是 loading)
     void invoke<BalanceData>("fetch_balance")
       .then((data) => {
         setBalance(data);
@@ -216,7 +216,7 @@ function App() {
   }, []);
 
   const loadUsage = React.useCallback(() => {
-    setUsageState("loading");
+    // 刷新时不降级为 loading,保留旧数据避免闪烁(初始 render 已是 loading)
     void fetchCurrentUsage()
       .then((data) => {
         setUsage(data);
@@ -226,8 +226,14 @@ function App() {
       .catch((error) => {
         const message = typeof error === "string" ? error : "查询失败";
         setUsageError(message);
-        setUsage(null);
-        setUsageState(message.includes("未配置") ? "nokey" : "error");
+        if (message.includes("未配置")) {
+          // Token 未配置/被清除:数据无效,清空并进入 nokey
+          setUsage(null);
+          setUsageState("nokey");
+        } else {
+          // 网络等瞬时错误:保留旧数据不闪烁;仅首次加载失败才进入 error
+          setUsageState((prev) => (prev === "ok" ? "ok" : "error"));
+        }
       });
   }, []);
 
