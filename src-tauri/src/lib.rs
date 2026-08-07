@@ -421,6 +421,21 @@ pub fn run() {
         to_app_config(config)
     }
 
+    // 迷你模式窗口:紧凑小窗;完整模式恢复保存的尺寸
+    fn apply_mini_window_size(app: &tauri::AppHandle) {
+        let config = read_stored_config().unwrap_or_default();
+        if let Some(window) = app.get_webview_window("main") {
+            if config.mini_mode {
+                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(360, 110)));
+            } else {
+                let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(
+                    config.window_width,
+                    config.window_height,
+                )));
+            }
+        }
+    }
+
     // 切换 mini 模式(主面板仅文本简洁显示),广播给所有窗口实时切换。
     #[tauri::command]
     fn save_mini_mode(app: tauri::AppHandle, mini_mode: bool) -> Result<AppConfig, String> {
@@ -428,6 +443,7 @@ pub fn run() {
         config.mini_mode = mini_mode;
         write_stored_config(&config)?;
         let _ = app.emit("mini-mode-changed", mini_mode);
+        apply_mini_window_size(&app);
         to_app_config(config)
     }
 
@@ -1191,6 +1207,7 @@ pub fn run() {
                             config.mini_mode = !config.mini_mode;
                             let _ = write_stored_config(&config);
                             let _ = app.emit("mini-mode-changed", config.mini_mode);
+                            apply_mini_window_size(app);
                             show_main_window(&window);
                         }
                     }

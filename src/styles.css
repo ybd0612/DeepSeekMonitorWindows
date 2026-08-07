@@ -81,53 +81,55 @@ button {
   gap: 9px;
 }
 
-/* mini 模式:纯文字简洁面板 */
+/* mini 模式:两行纯文字,小字号 */
 .mini-panel {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 0 16px 14px;
+  gap: 4px;
+  padding: 0 12px 10px;
 }
 
 .mini-drag {
   flex: 0 0 auto;
-  min-height: 26px;
+  min-height: 18px;
 }
 
-.mini-row {
+.mini-line {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 5px 2px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 13px;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  font-size: 11px;
 }
 
-.mini-row span {
-  color: rgba(var(--fg), 0.68);
+.mini-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.mini-label {
+  color: rgba(var(--fg), 0.62);
   font-weight: 700;
+}
+
+.mini-item strong {
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.mini-model-name {
+  color: var(--skin-accent);
+  font-weight: 900;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mini-row strong {
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.mini-model-title {
-  margin: 6px 0 2px;
-  padding: 2px;
-  font-size: 12px;
-  font-weight: 900;
-  color: var(--skin-accent);
-}
-
 .mini-error {
-  margin-bottom: 4px;
   color: var(--orange);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
 }
 

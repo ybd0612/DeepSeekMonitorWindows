@@ -83,6 +83,12 @@ const fmtTokensShort = (n: number) => {
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
   return String(Math.round(n));
 };
+// 保留 2 位小数,供 mini 模式使用
+const fmtTokens2 = (n: number) => {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + "K";
+  return String(Math.round(n));
+};
 const fmtMoney = (n: number) => "¥" + n.toFixed(2);
 const mmdd = (date: string) => {
   const parts = date.split("-");
@@ -304,6 +310,9 @@ function App() {
       const win = getCurrentWindow();
       win
         .onResized(({ payload }) => {
+          if (miniMode) {
+            return; // mini 模式自动缩放,不覆盖保存的完整尺寸
+          }
           window.clearTimeout(saveTimer);
           saveTimer = window.setTimeout(() => {
             void invoke("save_window_size", { width: payload.width, height: payload.height }).catch(
@@ -337,7 +346,7 @@ function App() {
       unlistenResize?.();
       unlistenMove?.();
     };
-  }, []);
+  }, [miniMode]);
 
   React.useEffect(() => {
     if (isSettingsWindow || !autoRefreshEnabled) {
@@ -1559,12 +1568,12 @@ function ModelDetailPanel({
   );
 }
 
-function MiniRow({ label, value }: { label: string; value: string }) {
+function MiniItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="mini-row">
-      <span>{label}</span>
+    <span className="mini-item">
+      <span className="mini-label">{label}</span>
       <strong>{value}</strong>
-    </div>
+    </span>
   );
 }
 
@@ -1607,7 +1616,8 @@ function MiniPanel({
   const hitRate = hit + miss > 0 ? (hit / (hit + miss)) * 100 : 0;
 
   const symbol = balance?.currency === "USD" ? "$" : "¥";
-  const balanceText = balanceState === "ok" ? `${symbol}${balance?.totalBalance ?? "0.00"}` : "—";
+  const balanceText =
+    balanceState === "ok" ? `${symbol}${Number(balance?.totalBalance ?? 0).toFixed(2)}` : "—";
   const todayCost = usageState === "ok" && today ? fmtMoney(today.totalCost) : "—";
   const monthCost = usageState === "ok" && usage ? fmtMoney(usage.monthCost) : "—";
   const errorText =
@@ -1617,14 +1627,20 @@ function MiniPanel({
     <section className="panel mini-panel">
       <header className="mini-drag" data-tauri-drag-region />
       {errorText && <div className="mini-error">{errorText}</div>}
-      <MiniRow label="余额" value={balanceText} />
-      <MiniRow label="当日消费" value={todayCost} />
-      <MiniRow label="本月消费" value={monthCost} />
-      {modelName && <div className="mini-model-title">{modelName}</div>}
-      <MiniRow label="当日输入" value={fmtTokensShort(input)} />
-      <MiniRow label="输入命中缓存" value={fmtTokensShort(hit)} />
-      <MiniRow label="输出" value={fmtTokensShort(output)} />
-      <MiniRow label="命中率" value={`${hitRate.toFixed(2)}%`} />
+      {/* 消费行 */}
+      <div className="mini-line">
+        <MiniItem label="余额" value={balanceText} />
+        <MiniItem label="当日" value={todayCost} />
+        <MiniItem label="本月" value={monthCost} />
+      </div>
+      {/* Token 行 */}
+      <div className="mini-line">
+        {modelName && <span className="mini-label mini-model-name">{modelName}</span>}
+        <MiniItem label="输入" value={fmtTokens2(input)} />
+        <MiniItem label="命中" value={fmtTokens2(hit)} />
+        <MiniItem label="输出" value={fmtTokens2(output)} />
+        <MiniItem label="命中率" value={`${hitRate.toFixed(2)}%`} />
+      </div>
     </section>
   );
 }
