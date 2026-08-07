@@ -256,6 +256,13 @@ function App() {
         // 整窗透明度只作用于主面板,设置窗口保持实心
         if (!isSettingsWindow) {
           applyWindowOpacity(Math.round((config.windowOpacity ?? 1) * 100));
+          // 窗口完全显示后由前端重新应用置顶:规避启动时 Rust setup 的
+          // set_always_on_top 在窗口未完全显示前调用导致未真正落位的竞态
+          try {
+            void getCurrentWindow().setAlwaysOnTop(config.alwaysOnTop).catch(() => {});
+          } catch {
+            // 浏览器预览无 Tauri
+          }
         }
       })
       .catch(() => {
