@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -165,7 +165,16 @@ const applyWindowOpacity = (percent: number) => {
 };
 
 function App() {
-  const [view, setView] = React.useState<ViewName>("dashboard");
+  // 独立设置窗口(label="settings")只渲染设置页;主窗口渲染仪表盘/详情。
+  // 浏览器预览无 Tauri,回退为主窗口视图。
+  const [isSettingsWindow] = React.useState(() => {
+    try {
+      return getCurrentWindow().label === "settings";
+    } catch {
+      return false;
+    }
+  });
+  const [view, setView] = React.useState<ViewName>(isSettingsWindow ? "settings" : "dashboard");
   const [model, setModel] = React.useState<ModelName>("flash");
 
   const [balance, setBalance] = React.useState<BalanceData | null>(null);
@@ -218,8 +227,11 @@ function App() {
   }, [loadBalance, loadUsage]);
 
   React.useEffect(() => {
+    if (isSettingsWindow) {
+      return; // 设置窗口无需拉取余额/用量数据
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isSettingsWindow]);
 
   React.useEffect(() => {
     void invoke<AppConfig>("get_app_config")
@@ -272,20 +284,41 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    if (!autoRefreshEnabled) {
+    if (isSettingsWindow || !autoRefreshEnabled) {
       return;
     }
     const timer = window.setInterval(refreshAll, refreshIntervalSeconds * 1000);
     return () => window.clearInterval(timer);
-  }, [autoRefreshEnabled, refreshAll, refreshIntervalSeconds]);
+  }, [autoRefreshEnabled, isSettingsWindow, refreshAll, refreshIntervalSeconds]);
 
-  // 托盘右键菜单(刷新数据/设置)驱动前端导航与刷新。浏览器预览无 Tauri,静默跳过。
+  // 跨窗口实时同步:设置窗口改动后,主窗口跟随更新。
+  // - display-config-changed: 透明度 / 区块显示开关
+  // - theme-changed: 换肤
+  // - refresh-data: 托盘菜单「刷新数据」
+  // 浏览器预览无 Tauri,静默跳过。
   React.useEffect(() => {
-    let unlistenSettings: (() => void) | undefined;
+    let unlistenConfig: (() => void) | undefined;
+    let unlistenTheme: (() => void) | undefined;
     let unlistenRefresh: (() => void) | undefined;
-    void listen("open-settings", () => setView("settings"))
+    void listen<AppConfig>("display-config-changed", (event) => {
+      if (isSettingsWindow) {
+        return; // 设置窗口自己已从命令返回值更新状态
+      }
+      setShowBalanceCard(event.payload.showBalanceCard);
+      setShowFlashRow(event.payload.showFlashRow);
+      setShowProRow(event.payload.showProRow);
+      setShowChart(event.payload.showChart);
+      applyWindowOpacity(Math.round((event.payload.windowOpacity ?? 1) * 100));
+    })
       .then((fn) => {
-        unlistenSettings = fn;
+        unlistenConfig = fn;
+      })
+      .catch(() => {});
+    void listen<string>("theme-changed", (event) => {
+      document.documentElement.setAttribute("data-theme", event.payload);
+    })
+      .then((fn) => {
+        unlistenTheme = fn;
       })
       .catch(() => {});
     void listen("refresh-data", () => refreshAll())
@@ -294,10 +327,11 @@ function App() {
       })
       .catch(() => {});
     return () => {
-      unlistenSettings?.();
+      unlistenConfig?.();
+      unlistenTheme?.();
       unlistenRefresh?.();
     };
-  }, [refreshAll]);
+  }, [isSettingsWindow, refreshAll]);
 
   return (
     <div className="stage">
@@ -339,7 +373,18 @@ function App() {
             setShowProRow(p);
             setShowChart(c);
           }}
-          onBack={() => setView("dashboard")}
+          onBack={() => {
+            if (isSettingsWindow) {
+              // 独立设置窗口:返回即关闭本窗口,主面板保持显示
+              try {
+                void getCurrentWindow().close().catch(() => {});
+              } catch {
+                // 浏览器预览无 Tauri
+              }
+            } else {
+              setView("dashboard");
+            }
+          }}
         />
       )}
       {view === "detail" && (
@@ -720,12 +765,14 @@ function SettingsPanel({
   // 配置加载完成前禁止持久化透明度,避免用默认值覆盖用户已保存的显示设置
   const displayLoadedRef = React.useRef(false);
 
-  // 换肤:亮/暗皮肤,与旧版一致存 localStorage、写入 documentElement data-theme
+  // 换肤:亮/暗皮肤,与旧版一致存 localStorage、写入 documentElement data-theme。
+  // 同时广播 theme-changed 让主窗口实时跟随(设置窗口与主窗口各自独立 DOM)。
   const setThemeSkin = React.useCallback((enabled: boolean) => {
     const next = enabled ? "light" : "dark";
     setTheme(next);
     localStorage.setItem("ui-theme", next);
     document.documentElement.setAttribute("data-theme", next);
+    void emit("theme-changed", next).catch(() => {});
   }, []);
   const configPath = config?.configPath ?? "%APPDATA%\\DeepSeekMonitorWindows\\config.json";
 

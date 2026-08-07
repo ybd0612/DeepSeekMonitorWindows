@@ -200,6 +200,31 @@ pub fn run() {
         let _ = window.set_focus();
     }
 
+    // 独立的设置窗口:透明无边框小窗,与主面板分离。
+    // 前端按窗口 label 决定渲染设置页,设置改动通过事件实时同步到主窗口。
+    fn open_settings_window(app: &tauri::AppHandle) -> Result<(), String> {
+        if app.get_webview_window("settings").is_none() {
+            let url = tauri::WebviewUrl::App("index.html".into());
+            tauri::WebviewWindowBuilder::new(app, "settings", url)
+                .title("DeepSeek Monitor 设置")
+                .inner_size(420.0, 620.0)
+                .min_inner_size(340.0, 420.0)
+                .resizable(true)
+                .decorations(false)
+                .transparent(true)
+                .shadow(false)
+                .skip_taskbar(true)
+                .center()
+                .build()
+                .map_err(|error| error.to_string())?;
+        }
+        if let Some(window) = app.get_webview_window("settings") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Ok(())
+    }
+
     #[tauri::command]
     fn hide_main_window(window: WebviewWindow) -> Result<(), String> {
         window.hide().map_err(|error| error.to_string())
@@ -289,9 +314,10 @@ pub fn run() {
     // 保存整窗透明度与置顶。透明度 clamp 到 0.3–1.0,避免滑到 0 时窗口完全不可见。
     // Tauri 2.11 无 set_opacity API,透明度由前端在 documentElement 上以 CSS opacity
     // 应用(窗口已 transparent,内容 alpha 降低后桌面自然透出);这里只负责持久化与置顶。
+    // 该命令可能由设置窗口发起,故置顶必须显式作用于主窗口,并用事件通知主窗口实时刷新。
     #[tauri::command]
     fn save_display_settings(
-        window: WebviewWindow,
+        app: tauri::AppHandle,
         opacity: f64,
         always_on_top: bool,
     ) -> Result<AppConfig, String> {
@@ -300,15 +326,19 @@ pub fn run() {
         config.window_opacity = opacity;
         config.always_on_top = always_on_top;
         write_stored_config(&config)?;
-        window
-            .set_always_on_top(always_on_top)
-            .map_err(|error| error.to_string())?;
-        to_app_config(config)
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.set_always_on_top(always_on_top);
+        }
+        let app_config = to_app_config(config)?;
+        let _ = app.emit("display-config-changed", &app_config);
+        Ok(app_config)
     }
 
-    // 主面板区块显示开关:余额卡 / Flash 行 / Pro 行 / 缓存图表,纯持久化。
+    // 主面板区块显示开关:余额卡 / Flash 行 / Pro 行 / 缓存图表。
+    // 持久化后广播给主窗口,主面板实时增删区块。
     #[tauri::command]
     fn save_visibility(
+        app: tauri::AppHandle,
         show_balance_card: bool,
         show_flash_row: bool,
         show_pro_row: bool,
@@ -320,7 +350,9 @@ pub fn run() {
         config.show_pro_row = show_pro_row;
         config.show_chart = show_chart;
         write_stored_config(&config)?;
-        to_app_config(config)
+        let app_config = to_app_config(config)?;
+        let _ = app.emit("display-config-changed", &app_config);
+        Ok(app_config)
     }
 
     // 记忆窗口尺寸,重启后由 setup 恢复。
@@ -1048,10 +1080,7 @@ pub fn run() {
                         }
                     }
                     "settings" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = app.emit("open-settings", ());
-                            show_main_window(&window);
-                        }
+                        let _ = open_settings_window(app);
                     }
                     "quit" => {
                         app.exit(0);
