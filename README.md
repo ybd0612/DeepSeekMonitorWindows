@@ -2,18 +2,20 @@
 
 面向 Windows 的 DeepSeek API 用量监控桌面应用,用于查看账户余额、当月消费、模型 Token 用量和最近用量趋势。
 
-本项目 fork 自 [JayHome137/deepseek-monitor](https://github.com/JayHome137/DeepSeekMonitor),在原 macOS 思路基础上按 Windows 平台重构实现,感谢原作者的开源工作。**本项目不是 DeepSeek 官方产品。**
+本项目 fork 自 [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows),实现思路源自 [JayHome137/deepseek-monitor](https://github.com/JayHome137/DeepSeekMonitor),并按 Windows 平台重构,感谢两位作者的开源工作。**本项目不是 DeepSeek 官方产品。**
 
 ## 功能特性
 
 - **余额查询**:调用 DeepSeek 官方余额接口,实时查看账户余额。
 - **用量统计**:当月消费、各模型 Token 总量、请求数、缓存命中 / 未命中 / 输出 Token。
 - **趋势分析**:最近 7 天消费趋势图和模型详情页。
-- **Mini 模式**:纯文字展示余额 / 消费 / 模型用量,紧凑不遮挡;普通 / Mini 模式各自独立记忆窗口位置与尺寸。
-- **Windows 托盘**:主窗口默认不占用任务栏,刷新 / 设置 / 模式切换入口收敛到托盘右键菜单。
+- **Mini 模式**:纯文字紧凑展示余额 / 消费 / 模型用量,两行小字号不遮挡;普通 / Mini 模式各自独立记忆窗口位置与尺寸。
+- **自动刷新**:按设定周期自动拉取最新数据,刷新失败时保留旧数据不闪烁。
+- **开机自启**:登录 Windows 后自动启动。
+- **Windows 托盘**:主窗口默认不占用任务栏,左键切换显示 / 隐藏,刷新、设置、模式切换入口收敛到右键菜单。
 - **凭据管理**:API Key 保存、清除与余额验证;用量 Token 支持网页登录自动同步与手动粘贴兜底。
-- **显示设置**:整窗透明度、始终置顶、余额卡 / 区块独立显隐,可拖拽调整窗口大小。
-- **个性化**:多套皮肤一键切换并记住选择。
+- **显示设置**:整窗透明度(含文字可透视桌面)、始终置顶、多套皮肤一键切换;主面板内容按需显隐(余额卡 / 各模型 / 缓存图表),窗口大小可自由拖拽并记住。
+- **动态模型列表**:模型与用量展示由平台接口动态驱动,不写死 flash / pro。
 - **单实例守卫**:防止重复多开,重复启动时唤起已有主面板。
 
 ## 页面截图
@@ -125,7 +127,7 @@ Rust 后端依赖:
 
 ## 致谢
 
-本项目 fork 自 [JayHome137/deepseek-monitor](https://github.com/JayHome137/DeepSeekMonitor),UI 视觉方向沿用原项目,并按 Windows Tauri 窗口适配,感谢原作者的开源贡献。
+本项目 fork 自 [Joyi-code/DeepSeekMonitorWindows](https://github.com/Joyi-code/DeepSeekMonitorWindows),其实现思路源自 [JayHome137/deepseek-monitor](https://github.com/JayHome137/DeepSeekMonitor),UI 视觉方向沿用原项目并按 Windows Tauri 适配,感谢上游与原作者的开源贡献。
 
 ## 免责声明
 
