@@ -87,6 +87,16 @@ button {
   flex-direction: column;
   gap: 2px;
   padding: 0 10px 8px;
+  /* 纯展示面板:禁止选中文字、悬停文字不出现文本光标 */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* mini 面板无任何可交互元素,子元素全部事件穿透,
+   让 mousedown 落在带 data-tauri-drag-region 的 .mini-panel 上,任意位置都能拖动窗口 */
+.mini-panel * {
+  pointer-events: none;
 }
 
 .mini-drag {

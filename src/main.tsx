@@ -1605,8 +1605,9 @@ function MiniPanel({
   }, [balanceText, todayCost, monthCost, modelName, input, hit, output, usageState, balanceState]);
 
   return (
-    <section ref={panelRef} className="panel mini-panel">
-      <header className="mini-drag" data-tauri-drag-region />
+    // 整个 mini 面板都是拖拽区:子元素已 pointer-events:none,任意位置按下即可拖动窗口
+    <section ref={panelRef} className="panel mini-panel" data-tauri-drag-region>
+      <header className="mini-drag" />
       {errorText && <div className="mini-error">{errorText}</div>}
       {/* 消费行 */}
       <div className="mini-line">
