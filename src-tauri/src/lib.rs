@@ -217,6 +217,39 @@ pub fn run() {
         )))
     }
 
+    // 校验保存的位置是否仍在任一显示器工作区附近。
+    // Windows 在显示器拔出、远程桌面切换或无效拖拽后可能返回 -32000 等离屏坐标。
+    fn is_window_position_visible(window: &WebviewWindow, x: i32, y: i32) -> bool {
+        let Ok(monitors) = window.available_monitors() else {
+            return false;
+        };
+        let Ok(size) = window.outer_size() else {
+            return false;
+        };
+        let width = size.width as i32;
+        let height = size.height as i32;
+        monitors.into_iter().any(|monitor| {
+            let area = monitor.work_area();
+            let left = area.position.x;
+            let top = area.position.y;
+            let right = left + area.size.width as i32;
+            let bottom = top + area.size.height as i32;
+            // 只要窗口与工作区有至少 24px 的交集，就视为可恢复位置。
+            x < right - 24 && x + width > left + 24 && y < bottom - 24 && y + height > top + 24
+        })
+    }
+
+    // 恢复保存位置;位置失效时回退到托盘附近,避免窗口落到 -32000 等屏幕外坐标。
+    fn restore_window_position(window: &WebviewWindow, position: (Option<i32>, Option<i32>)) {
+        if let (Some(x), Some(y)) = position {
+            if is_window_position_visible(window, x, y) {
+                let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
+                return;
+            }
+        }
+        let _ = position_near_tray(window);
+    }
+
     // 强制置顶:直接调 Win32 SetWindowPos(HWND_TOPMOST/NOTOPMOST)。
     // tao 的 set_always_on_top 依赖内部标志位 diff,重复设同值不会触发 SetWindowPos,
     // 导致启动时置顶不落位(表现为必须先关再开才生效)。
@@ -254,11 +287,7 @@ pub fn run() {
         } else {
             (config.window_x, config.window_y)
         };
-        if let (Some(x), Some(y)) = (px, py) {
-            let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
-        } else {
-            let _ = position_near_tray(window);
-        }
+        restore_window_position(window, (px, py));
         let _ = window.show();
         // Windows 在窗口隐藏/重新显示后可能丢失 WS_EX_TOPMOST,每次显示强制重新断言置顶
         apply_always_on_top(window, config.always_on_top);
@@ -477,11 +506,7 @@ pub fn run() {
             } else {
                 (config.window_x, config.window_y)
             };
-            if let (Some(x), Some(y)) = (px, py) {
-                let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
-            } else {
-                let _ = position_near_tray(&window);
-            }
+            restore_window_position(&window, (px, py));
         }
     }
 
